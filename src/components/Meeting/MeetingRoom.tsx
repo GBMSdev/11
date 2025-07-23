@@ -199,7 +199,7 @@ export function MeetingRoom() {
 
       // Setup WebRTC callbacks
       manager.onStream((peerId, stream, participantName, audioEnabled, videoEnabled) => {
-        console.log('Received stream from:', participantName);
+        console.log('Received stream from:', participantName, 'Stream:', stream, 'Tracks:', stream.getTracks().length);
         setRemoteStreams(prev => {
           const newMap = new Map(prev);
           newMap.set(peerId, { 
@@ -210,6 +210,7 @@ export function MeetingRoom() {
             isScreenSharing: false,
             audioLevel: 0
           });
+          console.log('Updated remote streams:', newMap.size);
           return newMap;
         });
       });
@@ -304,11 +305,14 @@ export function MeetingRoom() {
       };
 
       // Initialize media
-      const stream = await manager.initializeMedia(true, true);
+      console.log('Initializing media...');
+      const stream = await manager.initializeMedia(!isCameraOff, !isMuted);
       setLocalStream(stream);
+      console.log('Local stream initialized:', stream, 'Tracks:', stream.getTracks().length);
       setupLocalAudioMonitoring(stream);
 
       // Join the meeting
+      console.log('Joining meeting...');
       await manager.joinMeeting();
 
       // Start real-time updates
@@ -385,6 +389,7 @@ export function MeetingRoom() {
       const newCameraState = !isCameraOff;
       webrtcManager.toggleVideo(!newCameraState).catch(console.error);
       setIsCameraOff(newCameraState);
+      console.log('Camera toggled:', newCameraState ? 'OFF' : 'ON');
       toast.success(newCameraState ? 'Camera turned off' : 'Camera turned on');
     }
   };
@@ -395,7 +400,7 @@ export function MeetingRoom() {
     try {
       if (isScreenSharing) {
         // Stop screen sharing and return to camera
-        const stream = await webrtcManager.initializeMedia(true, true);
+        const stream = await webrtcManager.initializeMedia(!isCameraOff, !isMuted);
         setLocalStream(stream);
         setIsScreenSharing(false);
         toast.success('Screen sharing stopped');
@@ -411,7 +416,7 @@ export function MeetingRoom() {
         if (videoTrack) {
           videoTrack.onended = async () => {
             setIsScreenSharing(false);
-            const stream = await webrtcManager.initializeMedia(true, true);
+            const stream = await webrtcManager.initializeMedia(!isCameraOff, !isMuted);
             setLocalStream(stream);
             toast.info('Screen sharing ended');
           };

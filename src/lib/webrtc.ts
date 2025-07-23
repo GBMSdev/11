@@ -36,6 +36,7 @@ export class WebRTCManager {
   private onPeerLeftCallback?: (peerId: string) => void;
   private onParticipantCountCallback?: (count: number) => void;
   private onMediaStateCallback?: (peerId: string, audioEnabled: boolean, videoEnabled: boolean) => void;
+  private onHandRaisedCallback?: (participantId: string, name: string, raised: boolean) => void;
   private signalingChannel: any;
   private isInitialized = false;
   private mediaQuality: MediaQuality;
@@ -95,55 +96,82 @@ export class WebRTCManager {
       .on('broadcast', { event: 'media-state-changed' }, (payload) => {
         this.handleMediaStateChanged(payload.payload);
       })
+      .on('broadcast', { event: 'hand-raised' }, (payload) => {
+        if (payload.payload.participantId !== this.participantId) {
+          this.onHandRaisedCallback?.(
+            payload.payload.participantId, 
+            payload.payload.name, 
+            payload.payload.raised
+          );
+        }
+      })
       .subscribe();
   }
 
   async initializeMedia(video: boolean = true, audio: boolean = true): Promise<MediaStream> {
     try {
+      // Stop existing stream if any
+      if (this.localStream) {
+        this.localStream.getTracks().forEach(track => track.stop());
+      }
+
       const constraints: MediaStreamConstraints = {
         video: video ? {
-          width: { ideal: this.mediaQuality.video.width },
-          height: { ideal: this.mediaQuality.video.height },
-          frameRate: { ideal: this.mediaQuality.video.frameRate },
+          width: { ideal: this.mediaQuality.video.width, max: 1920 },
+          height: { ideal: this.mediaQuality.video.height, max: 1080 },
+          frameRate: { ideal: this.mediaQuality.video.frameRate, max: 30 },
           facingMode: this.isMobile ? 'user' : undefined
         } : false,
         audio: audio ? {
-          sampleRate: this.mediaQuality.audio.sampleRate,
           echoCancellation: this.mediaQuality.audio.echoCancellation,
           noiseSuppression: this.mediaQuality.audio.noiseSuppression,
           autoGainControl: this.mediaQuality.audio.autoGainControl
         } : false
       };
 
+      console.log('Requesting media with constraints:', constraints);
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('Media stream obtained:', this.localStream);
       
-      // Apply bitrate constraints
-      if (this.localStream && video) {
-        const videoTrack = this.localStream.getVideoTracks()[0];
-        if (videoTrack && 'applyConstraints' in videoTrack) {
-          await videoTrack.applyConstraints({
-            width: { ideal: this.mediaQuality.video.width },
-            height: { ideal: this.mediaQuality.video.height },
-            frameRate: { ideal: this.mediaQuality.video.frameRate }
-          });
-        }
-      }
-
+      // Update existing peer connections with new stream
+      this.updatePeerConnectionsWithStream();
+      
       return this.localStream;
     } catch (error) {
       console.error('Error accessing media devices:', error);
       // Fallback to lower quality
       try {
-        this.localStream = await navigator.mediaDevices.getUserMedia({
+        const fallbackConstraints = {
           video: video ? { width: 640, height: 480 } : false,
           audio: audio
-        });
+        };
+        console.log('Trying fallback constraints:', fallbackConstraints);
+        this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+        this.updatePeerConnectionsWithStream();
         return this.localStream;
       } catch (fallbackError) {
         console.error('Fallback media access failed:', fallbackError);
         throw fallbackError;
       }
     }
+  }
+
+  private updatePeerConnectionsWithStream() {
+    if (!this.localStream) return;
+
+    this.peers.forEach(({ peer }) => {
+      // Remove old tracks
+      peer.getSenders().forEach(sender => {
+        if (sender.track) {
+          peer.removeTrack(sender);
+        }
+      });
+
+      // Add new tracks
+      this.localStream!.getTracks().forEach(track => {
+        peer.addTrack(track, this.localStream!);
+      });
+    });
   }
 
   async startScreenShare(): Promise<MediaStream> {
@@ -212,6 +240,8 @@ export class WebRTCManager {
     if (this.isInitialized) return;
     this.isInitialized = true;
 
+    console.log('Joining meeting:', this.meetingId, 'as', this.participantName);
+
     // Announce joining
     await this.signalingChannel.send({
       type: 'broadcast',
@@ -231,12 +261,14 @@ export class WebRTCManager {
   private async handleUserJoined(data: { participantId: string; name: string; audioEnabled: boolean; videoEnabled: boolean; isScreenSharing: boolean }) {
     if (data.participantId === this.participantId) return;
 
-    console.log('User joined:', data.name);
+    console.log('User joined:', data.name, data.participantId);
     await this.createPeerConnection(data.participantId, data.name, true);
     this.updateParticipantCount();
   }
 
   private async createPeerConnection(peerId: string, name: string, isInitiator: boolean) {
+    console.log('Creating peer connection for:', name, 'isInitiator:', isInitiator);
+
     const configuration = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -250,9 +282,11 @@ export class WebRTCManager {
 
     const peer = new RTCPeerConnection(configuration);
 
-    // Add local stream tracks with enhanced settings
+    // Add local stream tracks
     if (this.localStream) {
+      console.log('Adding local stream tracks to peer connection');
       this.localStream.getTracks().forEach(track => {
+        console.log('Adding track:', track.kind, track.label);
         const sender = peer.addTrack(track, this.localStream!);
         
         // Apply encoding parameters for better quality
@@ -265,15 +299,20 @@ export class WebRTCManager {
           }
         }
       });
+    } else {
+      console.warn('No local stream available when creating peer connection');
     }
 
-    // Handle remote stream with enhanced tracking
+    // Handle remote stream
     peer.ontrack = (event) => {
-      console.log('Received remote stream from:', name);
+      console.log('Received remote track from:', name, event.track.kind);
       const [remoteStream] = event.streams;
+      console.log('Remote stream:', remoteStream, 'tracks:', remoteStream.getTracks().length);
+      
       const peerConnection = this.peers.get(peerId);
       if (peerConnection) {
         peerConnection.stream = remoteStream;
+        console.log('Calling onStreamCallback for:', name);
         this.onStreamCallback?.(
           peerId, 
           remoteStream, 
@@ -287,6 +326,7 @@ export class WebRTCManager {
     // Enhanced ICE handling
     peer.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log('Sending ICE candidate to:', name);
         this.signalingChannel.send({
           type: 'broadcast',
           event: 'ice-candidate',
@@ -302,11 +342,13 @@ export class WebRTCManager {
     // Enhanced connection state monitoring
     peer.onconnectionstatechange = () => {
       console.log(`Connection state with ${name}:`, peer.connectionState);
-      if (peer.connectionState === 'failed') {
-        // Attempt to restart ICE
+      if (peer.connectionState === 'connected') {
+        console.log(`Successfully connected to ${name}`);
+      } else if (peer.connectionState === 'failed') {
+        console.log(`Connection failed with ${name}, attempting ICE restart`);
         peer.restartIce();
       } else if (peer.connectionState === 'disconnected') {
-        // Wait a bit before removing peer
+        console.log(`Disconnected from ${name}`);
         setTimeout(() => {
           if (peer.connectionState === 'disconnected') {
             this.peers.delete(peerId);
@@ -315,6 +357,7 @@ export class WebRTCManager {
           }
         }, 5000);
       } else if (peer.connectionState === 'closed') {
+        console.log(`Connection closed with ${name}`);
         this.peers.delete(peerId);
         this.onPeerLeftCallback?.(peerId);
         this.updateParticipantCount();
@@ -324,6 +367,11 @@ export class WebRTCManager {
     // Monitor ICE connection state
     peer.oniceconnectionstatechange = () => {
       console.log(`ICE connection state with ${name}:`, peer.iceConnectionState);
+    };
+
+    // Monitor signaling state
+    peer.onsignalingstatechange = () => {
+      console.log(`Signaling state with ${name}:`, peer.signalingState);
     };
 
     this.peers.set(peerId, { 
@@ -336,14 +384,15 @@ export class WebRTCManager {
     });
 
     if (isInitiator) {
-      // Create and send offer with enhanced options
+      console.log('Creating offer for:', name);
+      // Create and send offer
       const offer = await peer.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: true,
-        iceRestart: false
+        offerToReceiveVideo: true
       });
       await peer.setLocalDescription(offer);
       
+      console.log('Sending offer to:', name);
       this.signalingChannel.send({
         type: 'broadcast',
         event: 'offer',
@@ -365,11 +414,13 @@ export class WebRTCManager {
     
     const peerConnection = this.peers.get(data.from);
     if (peerConnection) {
+      console.log('Setting remote description and creating answer for:', data.name);
       await peerConnection.peer.setRemoteDescription(data.offer);
       
       const answer = await peerConnection.peer.createAnswer();
       await peerConnection.peer.setLocalDescription(answer);
       
+      console.log('Sending answer to:', data.name);
       this.signalingChannel.send({
         type: 'broadcast',
         event: 'answer',
@@ -390,6 +441,7 @@ export class WebRTCManager {
     const peerConnection = this.peers.get(data.from);
     if (peerConnection) {
       await peerConnection.peer.setRemoteDescription(data.answer);
+      console.log('Set remote description from answer for:', data.name);
     }
   }
 
@@ -400,6 +452,7 @@ export class WebRTCManager {
     if (peerConnection) {
       try {
         await peerConnection.peer.addIceCandidate(data.candidate);
+        console.log('Added ICE candidate from:', data.from);
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
       }
@@ -444,6 +497,7 @@ export class WebRTCManager {
 
   private updateParticipantCount() {
     const count = this.peers.size + 1; // +1 for local participant
+    console.log('Participant count updated:', count);
     this.onParticipantCountCallback?.(count);
   }
 
@@ -461,6 +515,10 @@ export class WebRTCManager {
 
   onMediaStateChanged(callback: (peerId: string, audioEnabled: boolean, videoEnabled: boolean) => void) {
     this.onMediaStateCallback = callback;
+  }
+
+  onHandRaised(callback: (participantId: string, name: string, raised: boolean) => void) {
+    this.onHandRaisedCallback = callback;
   }
 
   async toggleAudio(enabled: boolean) {
@@ -527,15 +585,9 @@ export class WebRTCManager {
     });
   }
 
-  onHandRaised(callback: (participantId: string, name: string, raised: boolean) => void) {
-    this.signalingChannel.on('broadcast', { event: 'hand-raised' }, (payload: any) => {
-      if (payload.payload.participantId !== this.participantId) {
-        callback(payload.payload.participantId, payload.payload.name, payload.payload.raised);
-      }
-    });
-  }
-
   async leaveMeeting() {
+    console.log('Leaving meeting');
+    
     // Announce leaving
     await this.signalingChannel.send({
       type: 'broadcast',

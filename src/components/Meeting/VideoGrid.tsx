@@ -39,22 +39,36 @@ function VideoTile({
   connectionQuality = 'good'
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
   const [localAudioLevel, setLocalAudioLevel] = useState(0);
 
   useEffect(() => {
     if (videoRef.current && stream) {
+      console.log('Setting video stream for:', participantName, stream);
       videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(console.error);
       
+      // Handle video loading
       const video = videoRef.current;
-      const handleLoadedData = () => setIsVideoLoaded(true);
-      video.addEventListener('loadeddata', handleLoadedData);
+      const handleCanPlay = () => {
+        console.log('Video can play for:', participantName);
+        setIsVideoLoaded(true);
+        video.play().catch(console.error);
+      };
+      
+      const handleLoadedMetadata = () => {
+        console.log('Video metadata loaded for:', participantName);
+      };
+      
+      video.addEventListener('canplay', handleCanPlay);
+      video.addEventListener('loadedmetadata', handleLoadedMetadata);
       
       return () => {
-        video.removeEventListener('loadeddata', handleLoadedData);
+        video.removeEventListener('canplay', handleCanPlay);
+        video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
+    } else {
+      console.log('No stream for:', participantName, 'stream:', stream);
+      setIsVideoLoaded(false);
     }
   }, [stream]);
 
@@ -113,7 +127,7 @@ function VideoTile({
     .join('')
     .toUpperCase();
 
-  const showVideo = stream && videoEnabled && !isCameraOff && isVideoLoaded;
+  const showVideo = stream && videoEnabled && !isCameraOff;
 
   const getConnectionColor = () => {
     switch (connectionQuality) {
@@ -157,6 +171,7 @@ function VideoTile({
           autoPlay
           playsInline
           muted={isLocal}
+          controls={false}
           className="w-full h-full object-cover transition-opacity duration-300"
           style={{ transform: isLocal && !isScreenShare ? 'scaleX(-1)' : 'none' }}
         />
@@ -173,7 +188,7 @@ function VideoTile({
             <p className={`font-medium ${isLarge ? 'text-base' : 'text-sm'}`}>
               {participantName}
             </p>
-            {!videoEnabled && (
+            {(!videoEnabled || !stream) && (
               <p className="text-xs text-gray-400 mt-1">Camera off</p>
             )}
           </div>
@@ -286,9 +301,12 @@ function VideoTile({
       </div>
 
       {/* Loading indicator */}
-      {stream && !isVideoLoaded && videoEnabled && (
+      {stream && videoEnabled && !isVideoLoaded && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-800">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+          <div className="text-center text-white">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2"></div>
+            <p className="text-sm">Loading video...</p>
+          </div>
         </div>
       )}
 
