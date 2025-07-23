@@ -3,7 +3,7 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Video, VideoOff, Mic, MicOff, Monitor, MonitorOff, 
   MessageSquare, Users, Hand, PhoneOff, Settings,
-  Copy, Send, MoreVertical
+  Copy, Send, MoreVertical, X
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { WebRTCManager } from '../../lib/webrtc';
@@ -51,6 +51,8 @@ export function MeetingRoom() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
   const [handRaisedParticipants, setHandRaisedParticipants] = useState<Set<string>>(new Set());
+  const [participantCount, setParticipantCount] = useState(1);
+  const [peerMediaStates, setPeerMediaStates] = useState<Map<string, { audioEnabled: boolean; videoEnabled: boolean }>>(new Map());
 
   // WebRTC
   const [webrtcManager, setWebrtcManager] = useState<WebRTCManager | null>(null);
@@ -157,6 +159,11 @@ export function MeetingRoom() {
           newSet.delete(peerId);
           return newSet;
         });
+        setPeerMediaStates(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(peerId);
+          return newMap;
+        });
       });
 
       manager.onHandRaised((participantId, name, raised) => {
@@ -169,6 +176,34 @@ export function MeetingRoom() {
             newSet.delete(participantId);
           }
           return newSet;
+        });
+      });
+
+      // Setup participant count tracking
+      manager.onParticipantCount((count) => {
+        setParticipantCount(count);
+      });
+
+      // Setup media state tracking
+      manager.onMediaStateChanged((peerId, audioEnabled, videoEnabled) => {
+        setPeerMediaStates(prev => {
+          const newMap = new Map(prev);
+          newMap.set(peerId, { audioEnabled, videoEnabled });
+          return newMap;
+        });
+        
+        // Update remote streams with media state
+        setRemoteStreams(prev => {
+          const newMap = new Map(prev);
+          const existing = newMap.get(peerId);
+          if (existing) {
+            newMap.set(peerId, {
+              ...existing,
+              audioEnabled,
+              videoEnabled
+            });
+          }
+          return newMap;
         });
       });
 
@@ -242,7 +277,7 @@ export function MeetingRoom() {
   const toggleMute = () => {
     if (webrtcManager) {
       const newMutedState = !isMuted;
-      webrtcManager.toggleAudio(!newMutedState);
+      webrtcManager.toggleAudio(!newMutedState).catch(console.error);
       setIsMuted(newMutedState);
       toast.success(newMutedState ? 'Microphone muted' : 'Microphone unmuted');
     }
@@ -251,7 +286,7 @@ export function MeetingRoom() {
   const toggleCamera = () => {
     if (webrtcManager) {
       const newCameraState = !isCameraOff;
-      webrtcManager.toggleVideo(!newCameraState);
+      webrtcManager.toggleVideo(!newCameraState).catch(console.error);
       setIsCameraOff(newCameraState);
       toast.success(newCameraState ? 'Camera turned off' : 'Camera turned on');
     }
@@ -375,6 +410,7 @@ export function MeetingRoom() {
           isScreenSharing={isScreenSharing}
           handRaisedParticipants={handRaisedParticipants}
           localHandRaised={handRaised}
+          participantCount={participantCount}
         />
         
         {/* Top bar */}
@@ -385,8 +421,8 @@ export function MeetingRoom() {
               <span className="text-sm opacity-75">
                 {format(new Date(), 'HH:mm')}
               </span>
-              <span className="text-sm bg-white/20 px-2 py-1 rounded">
-                {participants.length} participant{participants.length !== 1 ? 's' : ''}
+              <span className="text-sm bg-white/20 px-3 py-1 rounded-full font-medium">
+                {participantCount} participant{participantCount !== 1 ? 's' : ''}
               </span>
             </div>
             <div className="flex items-center space-x-2">
@@ -408,11 +444,11 @@ export function MeetingRoom() {
         </div>
 
         {/* Bottom controls */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-6 z-10">
-          <div className="flex items-center justify-center space-x-4">
+        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 sm:p-6 z-10">
+          <div className="flex items-center justify-center space-x-2 sm:space-x-4">
             <button
               onClick={toggleMute}
-              className={`p-4 rounded-full transition-all ${
+              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
                 isMuted 
                   ? 'bg-red-500 hover:bg-red-600' 
                   : 'bg-white/20 hover:bg-white/30'
@@ -420,15 +456,15 @@ export function MeetingRoom() {
               title={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? (
-                <MicOff className="w-6 h-6 text-white" />
+                <MicOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               ) : (
-                <Mic className="w-6 h-6 text-white" />
+                <Mic className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               )}
             </button>
 
             <button
               onClick={toggleCamera}
-              className={`p-4 rounded-full transition-all ${
+              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
                 isCameraOff 
                   ? 'bg-red-500 hover:bg-red-600' 
                   : 'bg-white/20 hover:bg-white/30'
@@ -436,15 +472,15 @@ export function MeetingRoom() {
               title={isCameraOff ? 'Turn on camera' : 'Turn off camera'}
             >
               {isCameraOff ? (
-                <VideoOff className="w-6 h-6 text-white" />
+                <VideoOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               ) : (
-                <Video className="w-6 h-6 text-white" />
+                <Video className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               )}
             </button>
 
             <button
               onClick={toggleScreenShare}
-              className={`p-4 rounded-full transition-all ${
+              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
                 isScreenSharing 
                   ? 'bg-blue-500 hover:bg-blue-600' 
                   : 'bg-white/20 hover:bg-white/30'
@@ -452,38 +488,38 @@ export function MeetingRoom() {
               title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
             >
               {isScreenSharing ? (
-                <MonitorOff className="w-6 h-6 text-white" />
+                <MonitorOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               ) : (
-                <Monitor className="w-6 h-6 text-white" />
+                <Monitor className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               )}
             </button>
 
             <button
               onClick={toggleHandRaise}
-              className={`p-4 rounded-full transition-all ${
+              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
                 handRaised 
                   ? 'bg-yellow-500 hover:bg-yellow-600' 
                   : 'bg-white/20 hover:bg-white/30'
               }`}
               title={handRaised ? 'Lower hand' : 'Raise hand'}
             >
-              <Hand className="w-6 h-6 text-white" />
+              <Hand className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
             </button>
 
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-4 rounded-full bg-white/20 hover:bg-white/30 transition-all lg:hidden"
+              className="p-3 sm:p-4 rounded-full bg-white/20 hover:bg-white/30 transition-all transform hover:scale-105 lg:hidden"
               title="Toggle chat"
             >
-              <MessageSquare className="w-6 h-6 text-white" />
+              <MessageSquare className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
             </button>
 
             <button
               onClick={leaveMeeting}
-              className="p-4 rounded-full bg-red-500 hover:bg-red-600 transition-all"
+              className="p-3 sm:p-4 rounded-full bg-red-500 hover:bg-red-600 transition-all transform hover:scale-105"
               title="Leave meeting"
             >
-              <PhoneOff className="w-6 h-6 text-white" />
+              <PhoneOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
             </button>
           </div>
         </div>
@@ -492,9 +528,18 @@ export function MeetingRoom() {
       {/* Sidebar */}
       <div className={`w-80 bg-white border-l border-gray-200 flex flex-col transition-all duration-300 ${
         sidebarOpen ? 'translate-x-0' : 'translate-x-full'
-      } lg:translate-x-0`}>
+      } lg:translate-x-0 fixed lg:relative top-0 right-0 h-full z-20 lg:z-auto`}>
         {/* Sidebar header */}
         <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center justify-between mb-4 lg:hidden">
+            <h3 className="text-lg font-semibold text-gray-900">Meeting Info</h3>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
           <div className="flex space-x-1">
             <button
               onClick={() => setActiveTab('chat')}
@@ -516,7 +561,7 @@ export function MeetingRoom() {
               }`}
             >
               <Users className="w-4 h-4 inline mr-2" />
-              People ({participants.length})
+              People ({participantCount})
             </button>
           </div>
         </div>
