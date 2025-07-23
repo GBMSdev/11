@@ -3,11 +3,13 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Video, VideoOff, Mic, MicOff, Monitor, MonitorOff, 
   MessageSquare, Users, Hand, PhoneOff, Settings,
-  Copy, Send, MoreVertical, X
+  Copy, Send, MoreVertical, X, UserCheck
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { WebRTCManager } from '../../lib/webrtc';
 import { VideoGrid } from './VideoGrid';
+import { WaitingRoom } from './WaitingRoom';
+import { AdmissionPanel } from './AdmissionPanel';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
@@ -38,6 +40,8 @@ export function MeetingRoom() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isWaitingForAdmission, setIsWaitingForAdmission] = useState(false);
+  const [isHost, setIsHost] = useState(false);
   const [participantName, setParticipantName] = useState('');
   const [participantId] = useState(uuidv4());
   
@@ -52,12 +56,20 @@ export function MeetingRoom() {
   const [handRaised, setHandRaised] = useState(false);
   const [handRaisedParticipants, setHandRaisedParticipants] = useState<Set<string>>(new Set());
   const [participantCount, setParticipantCount] = useState(1);
+  const [localAudioLevel, setLocalAudioLevel] = useState(0);
   const [peerMediaStates, setPeerMediaStates] = useState<Map<string, { audioEnabled: boolean; videoEnabled: boolean }>>(new Map());
 
   // WebRTC
   const [webrtcManager, setWebrtcManager] = useState<WebRTCManager | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStreams, setRemoteStreams] = useState<Map<string, { stream: MediaStream; name: string }>>(new Map());
+  const [remoteStreams, setRemoteStreams] = useState<Map<string, { 
+    stream: MediaStream; 
+    name: string; 
+    audioEnabled?: boolean; 
+    videoEnabled?: boolean;
+    isScreenSharing?: boolean;
+    audioLevel?: number;
+  }>>(new Map());
 
   // Refs
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -104,6 +116,8 @@ export function MeetingRoom() {
                    'Guest';
       
       setParticipantName(name);
+      const hostStatus = location.state?.isHost || false;
+      setIsHost(hostStatus);
 
       // Fetch meeting details
       const { data: meetingData, error: meetingError } = await supabase
@@ -120,29 +134,82 @@ export function MeetingRoom() {
       
       setMeeting(meetingData);
 
-      // Add participant to database
-      const { error: participantError } = await supabase
+      // Add participant to database with admission status
+      const { data: participantData, error: participantError } = await supabase
         .from('participants')
         .insert({
           meeting_id: meetingData.id,
           name: name,
           user_id: null,
+          admitted: hostStatus ? true : null, // Host is auto-admitted, others wait
         });
 
       if (participantError) {
         console.error('Error adding participant:', participantError);
       }
 
+      // If not host, show waiting room
+      if (!hostStatus) {
+        setIsWaitingForAdmission(true);
+        setIsLoading(false);
+        
+        // Listen for admission
+        const admissionChannel = supabase
+          .channel(`admission-${participantId}`)
+          .on('postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'participants',
+              filter: `name=eq.${name}`
+            },
+            (payload) => {
+              const updatedParticipant = payload.new as any;
+              if (updatedParticipant.admitted === true) {
+                setIsWaitingForAdmission(false);
+                proceedToMeeting(meetingData, name);
+                admissionChannel.unsubscribe();
+              } else if (updatedParticipant.left_at) {
+                toast.error('You were not admitted to the meeting');
+                navigate('/');
+                admissionChannel.unsubscribe();
+              }
+            }
+          )
+          .subscribe();
+        
+        return;
+      }
+
+      // Host proceeds directly
+      await proceedToMeeting(meetingData, name);
+      
+    } catch (error: any) {
+      console.error('Error initializing meeting:', error);
+      toast.error('Failed to join meeting');
+      navigate('/');
+    }
+  };
+
+  const proceedToMeeting = async (meetingData: any, name: string) => {
+    try {
       // Initialize WebRTC
       const manager = new WebRTCManager(meetingData.id, participantId, name);
       setWebrtcManager(manager);
 
       // Setup WebRTC callbacks
-      manager.onStream((peerId, stream, participantName) => {
+      manager.onStream((peerId, stream, participantName, audioEnabled, videoEnabled) => {
         console.log('Received stream from:', participantName);
         setRemoteStreams(prev => {
           const newMap = new Map(prev);
-          newMap.set(peerId, { stream, name: participantName });
+          newMap.set(peerId, { 
+            stream, 
+            name: participantName, 
+            audioEnabled, 
+            videoEnabled,
+            isScreenSharing: false,
+            audioLevel: 0
+          });
           return newMap;
         });
       });
@@ -207,9 +274,39 @@ export function MeetingRoom() {
         });
       });
 
+      // Setup audio level monitoring for local stream
+      const setupLocalAudioMonitoring = (stream: MediaStream) => {
+        if (!stream.getAudioTracks().length) return;
+        
+        const audioContext = new AudioContext();
+        const analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(stream);
+        
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        const updateAudioLevel = () => {
+          if (!isMuted) {
+            analyser.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+            const normalizedLevel = Math.min(average / 128, 1);
+            setLocalAudioLevel(normalizedLevel);
+          } else {
+            setLocalAudioLevel(0);
+          }
+          requestAnimationFrame(updateAudioLevel);
+        };
+
+        updateAudioLevel();
+      };
+
       // Initialize media
       const stream = await manager.initializeMedia(true, true);
       setLocalStream(stream);
+      setupLocalAudioMonitoring(stream);
 
       // Join the meeting
       await manager.joinMeeting();
@@ -221,7 +318,7 @@ export function MeetingRoom() {
       toast.success('Joined meeting successfully!');
       
     } catch (error: any) {
-      console.error('Error initializing meeting:', error);
+      console.error('Error proceeding to meeting:', error);
       toast.error('Failed to join meeting');
       navigate('/');
     }
@@ -385,6 +482,20 @@ export function MeetingRoom() {
     toast.success('Meeting link copied to clipboard!');
   };
 
+  const handleParticipantAdmitted = (participantId: string) => {
+    // Refresh participants list
+    if (meeting?.id) {
+      fetchParticipants(meeting.id);
+    }
+  };
+
+  const handleParticipantRejected = (participantId: string) => {
+    // Refresh participants list
+    if (meeting?.id) {
+      fetchParticipants(meeting.id);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="h-screen bg-gray-900 flex items-center justify-center">
@@ -396,8 +507,27 @@ export function MeetingRoom() {
     );
   }
 
+  if (isWaitingForAdmission) {
+    return (
+      <WaitingRoom
+        meetingTitle={meeting?.title || 'Meeting'}
+        participantName={participantName}
+        onAdmitted={() => setIsWaitingForAdmission(false)}
+        onRejected={() => navigate('/')}
+      />
+    );
+  }
+
   return (
     <div className="h-screen bg-gray-900 flex">
+      {/* Host admission panel */}
+      <AdmissionPanel
+        meetingId={meeting?.id}
+        isHost={isHost}
+        onParticipantAdmitted={handleParticipantAdmitted}
+        onParticipantRejected={handleParticipantRejected}
+      />
+      
       {/* Main video area */}
       <div className="flex-1 relative">
         {/* Video Grid */}
@@ -405,12 +535,14 @@ export function MeetingRoom() {
           localStream={localStream || undefined}
           remoteStreams={remoteStreams}
           localParticipantName={participantName}
+          localParticipantId={participantId}
           isMuted={isMuted}
           isCameraOff={isCameraOff}
           isScreenSharing={isScreenSharing}
           handRaisedParticipants={handRaisedParticipants}
           localHandRaised={handRaised}
           participantCount={participantCount}
+          localAudioLevel={localAudioLevel}
         />
         
         {/* Top bar */}
@@ -418,6 +550,12 @@ export function MeetingRoom() {
           <div className="flex items-center justify-between text-white">
             <div className="flex items-center space-x-4">
               <h1 className="text-xl font-semibold">{meeting?.title}</h1>
+              {isHost && (
+                <span className="text-xs bg-blue-500/80 px-2 py-1 rounded-full font-medium flex items-center gap-1">
+                  <UserCheck className="w-3 h-3" />
+                  Host
+                </span>
+              )}
               <span className="text-sm opacity-75">
                 {format(new Date(), 'HH:mm')}
               </span>

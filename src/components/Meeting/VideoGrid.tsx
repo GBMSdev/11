@@ -1,43 +1,53 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Mic, MicOff, Video, VideoOff, Hand, Monitor, Maximize2, Volume2, VolumeX } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, Hand, Monitor, Maximize2, Volume2, VolumeX, Pin, PinOff } from 'lucide-react';
 
 interface VideoTileProps {
   stream?: MediaStream;
   participantName: string;
+  participantId: string;
   isLocal?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
   isScreenShare?: boolean;
   handRaised?: boolean;
   isLarge?: boolean;
+  isPinned?: boolean;
   onToggleFullscreen?: () => void;
+  onTogglePin?: () => void;
   audioEnabled?: boolean;
   videoEnabled?: boolean;
+  audioLevel?: number;
+  connectionQuality?: 'excellent' | 'good' | 'poor';
 }
 
 function VideoTile({ 
   stream, 
   participantName, 
+  participantId,
   isLocal = false, 
   isMuted = false, 
   isCameraOff = false,
   isScreenShare = false,
   handRaised = false,
   isLarge = false,
+  isPinned = false,
   onToggleFullscreen,
+  onTogglePin,
   audioEnabled = true,
-  videoEnabled = true
+  videoEnabled = true,
+  audioLevel = 0,
+  connectionQuality = 'good'
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
+  const [localAudioLevel, setLocalAudioLevel] = useState(0);
 
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(console.error);
       
-      // Monitor video load
       const video = videoRef.current;
       const handleLoadedData = () => setIsVideoLoaded(true);
       video.addEventListener('loadeddata', handleLoadedData);
@@ -48,34 +58,54 @@ function VideoTile({
     }
   }, [stream]);
 
-  // Audio level monitoring for visual feedback
+  // Enhanced audio level monitoring
   useEffect(() => {
     if (!stream || !audioEnabled || isMuted) {
-      setAudioLevel(0);
+      setLocalAudioLevel(0);
       return;
     }
 
-    const audioContext = new AudioContext();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    
-    source.connect(analyser);
-    analyser.fftSize = 256;
+    let audioContext: AudioContext;
+    let analyser: AnalyserNode;
+    let source: MediaStreamAudioSourceNode;
+    let animationFrame: number;
 
-    const updateAudioLevel = () => {
-      analyser.getByteFrequencyData(dataArray);
-      const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-      setAudioLevel(average / 255);
-      requestAnimationFrame(updateAudioLevel);
+    const setupAudioAnalysis = async () => {
+      try {
+        audioContext = new AudioContext();
+        analyser = audioContext.createAnalyser();
+        source = audioContext.createMediaStreamSource(stream);
+        
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        const updateAudioLevel = () => {
+          analyser.getByteFrequencyData(dataArray);
+          const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+          const normalizedLevel = Math.min(average / 128, 1);
+          setLocalAudioLevel(normalizedLevel);
+          animationFrame = requestAnimationFrame(updateAudioLevel);
+        };
+
+        updateAudioLevel();
+      } catch (error) {
+        console.error('Audio analysis setup failed:', error);
+      }
     };
 
-    updateAudioLevel();
+    setupAudioAnalysis();
 
     return () => {
-      audioContext.close();
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      if (audioContext) audioContext.close();
     };
   }, [stream, audioEnabled, isMuted]);
+
+  const currentAudioLevel = audioLevel || localAudioLevel;
+  const isSpeaking = currentAudioLevel > 0.1;
 
   const initials = participantName
     .split(' ')
@@ -85,12 +115,42 @@ function VideoTile({
 
   const showVideo = stream && videoEnabled && !isCameraOff && isVideoLoaded;
 
+  const getConnectionColor = () => {
+    switch (connectionQuality) {
+      case 'excellent': return 'bg-green-500';
+      case 'good': return 'bg-yellow-500';
+      case 'poor': return 'bg-red-500';
+      default: return 'bg-gray-500';
+    }
+  };
+
+  const getAudioLevelBars = () => {
+    const bars = [];
+    const barCount = 5;
+    const activeBarCount = Math.ceil(currentAudioLevel * barCount);
+    
+    for (let i = 0; i < barCount; i++) {
+      bars.push(
+        <div
+          key={i}
+          className={`w-1 rounded-full transition-all duration-100 ${
+            i < activeBarCount ? 'bg-green-400' : 'bg-gray-400'
+          }`}
+          style={{ height: `${8 + (i * 2)}px` }}
+        />
+      );
+    }
+    return bars;
+  };
+
   return (
     <div className={`relative bg-gray-800 rounded-lg overflow-hidden transition-all duration-300 ${
       isLarge ? 'aspect-video' : 'aspect-video'
     } ${handRaised ? 'ring-4 ring-yellow-400 ring-opacity-75' : ''} ${
-      audioLevel > 0.1 ? 'ring-2 ring-green-400 ring-opacity-50' : ''
-    }`}>
+      isSpeaking ? 'ring-2 ring-green-400 ring-opacity-75 shadow-lg shadow-green-400/25' : ''
+    } ${isPinned ? 'ring-2 ring-blue-400 ring-opacity-75' : ''}`}>
+      
+      {/* Video or Avatar */}
       {showVideo ? (
         <video
           ref={videoRef}
@@ -103,9 +163,9 @@ function VideoTile({
       ) : (
         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-800">
           <div className="text-center text-white">
-            <div className={`bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center mx-auto mb-2 ${
-              isLarge ? 'w-20 h-20' : 'w-16 h-16'
-            }`}>
+            <div className={`bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center mx-auto mb-2 transition-all duration-300 ${
+              isSpeaking ? 'ring-4 ring-green-400 ring-opacity-50 scale-110' : ''
+            } ${isLarge ? 'w-20 h-20' : 'w-16 h-16'}`}>
               <span className={`text-white font-semibold ${isLarge ? 'text-2xl' : 'text-xl'}`}>
                 {initials}
               </span>
@@ -132,18 +192,30 @@ function VideoTile({
       {/* Screen share indicator */}
       {isScreenShare && (
         <div className="absolute top-3 left-3 z-10">
-          <div className="bg-green-500 text-white px-2 py-1 rounded text-xs font-medium flex items-center gap-1">
+          <div className="bg-green-500 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1 shadow-lg">
             <Monitor className="w-3 h-3" />
             Screen Share
           </div>
         </div>
       )}
 
-      {/* Audio level indicator */}
-      {audioEnabled && !isMuted && audioLevel > 0.1 && (
+      {/* Pin indicator */}
+      {isPinned && (
+        <div className="absolute top-3 right-3 z-10">
+          <div className="bg-blue-500 text-white p-1 rounded-full shadow-lg">
+            <Pin className="w-3 h-3" />
+          </div>
+        </div>
+      )}
+
+      {/* Audio level visualization */}
+      {audioEnabled && !isMuted && (
         <div className="absolute top-3 left-3 z-10">
-          <div className="bg-green-500 text-white p-1 rounded-full">
+          <div className="bg-black/50 backdrop-blur-sm text-white p-2 rounded-full flex items-center gap-1">
             <Volume2 className="w-3 h-3" />
+            <div className="flex items-end gap-0.5 h-4">
+              {getAudioLevelBars()}
+            </div>
           </div>
         </div>
       )}
@@ -152,21 +224,22 @@ function VideoTile({
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className={`text-white font-medium ${isLarge ? 'text-base' : 'text-sm'}`}>
+            <span className={`text-white font-medium truncate ${isLarge ? 'text-base' : 'text-sm'}`}>
               {participantName} {isLocal && '(You)'}
             </span>
+            
             {/* Connection quality indicator */}
-            <div className="flex space-x-1">
-              <div className="w-1 h-3 bg-green-400 rounded-full"></div>
-              <div className="w-1 h-3 bg-green-400 rounded-full"></div>
-              <div className="w-1 h-2 bg-gray-400 rounded-full"></div>
+            <div className="flex items-center space-x-1">
+              <div className={`w-2 h-2 rounded-full ${getConnectionColor()}`}></div>
+              <div className={`w-2 h-3 rounded-full ${connectionQuality !== 'poor' ? getConnectionColor() : 'bg-gray-400'}`}></div>
+              <div className={`w-2 h-4 rounded-full ${connectionQuality === 'excellent' ? getConnectionColor() : 'bg-gray-400'}`}></div>
             </div>
           </div>
           
           <div className="flex items-center space-x-1">
             {/* Audio indicator */}
             {audioEnabled && !isMuted ? (
-              <div className={`p-1 rounded ${audioLevel > 0.1 ? 'bg-green-500' : 'bg-gray-600'}`}>
+              <div className={`p-1 rounded transition-all ${isSpeaking ? 'bg-green-500 scale-110' : 'bg-gray-600'}`}>
                 <Mic className="w-3 h-3 text-white" />
               </div>
             ) : (
@@ -186,15 +259,28 @@ function VideoTile({
               </div>
             )}
 
-            {/* Fullscreen toggle for mobile */}
-            {onToggleFullscreen && (
-              <button
-                onClick={onToggleFullscreen}
-                className="p-1 rounded bg-gray-600 hover:bg-gray-500 transition-colors lg:hidden"
-              >
-                <Maximize2 className="w-3 h-3 text-white" />
-              </button>
-            )}
+            {/* Mobile controls */}
+            <div className="flex items-center space-x-1 lg:hidden">
+              {onTogglePin && (
+                <button
+                  onClick={onTogglePin}
+                  className="p-1 rounded bg-gray-600 hover:bg-gray-500 transition-colors"
+                  title={isPinned ? 'Unpin' : 'Pin participant'}
+                >
+                  {isPinned ? <PinOff className="w-3 h-3 text-white" /> : <Pin className="w-3 h-3 text-white" />}
+                </button>
+              )}
+              
+              {onToggleFullscreen && (
+                <button
+                  onClick={onToggleFullscreen}
+                  className="p-1 rounded bg-gray-600 hover:bg-gray-500 transition-colors"
+                  title="Focus view"
+                >
+                  <Maximize2 className="w-3 h-3 text-white" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -205,34 +291,51 @@ function VideoTile({
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
         </div>
       )}
+
+      {/* Speaking indicator overlay */}
+      {isSpeaking && (
+        <div className="absolute inset-0 border-2 border-green-400 rounded-lg pointer-events-none animate-pulse"></div>
+      )}
     </div>
   );
 }
 
 interface VideoGridProps {
   localStream?: MediaStream;
-  remoteStreams: Map<string, { stream: MediaStream; name: string; audioEnabled?: boolean; videoEnabled?: boolean }>;
+  remoteStreams: Map<string, { 
+    stream: MediaStream; 
+    name: string; 
+    audioEnabled?: boolean; 
+    videoEnabled?: boolean;
+    isScreenSharing?: boolean;
+    audioLevel?: number;
+  }>;
   localParticipantName: string;
+  localParticipantId: string;
   isMuted: boolean;
   isCameraOff: boolean;
   isScreenSharing: boolean;
   handRaisedParticipants: Set<string>;
   localHandRaised: boolean;
   participantCount: number;
+  localAudioLevel?: number;
 }
 
 export function VideoGrid({
   localStream,
   remoteStreams,
   localParticipantName,
+  localParticipantId,
   isMuted,
   isCameraOff,
   isScreenSharing,
   handRaisedParticipants,
   localHandRaised,
-  participantCount
+  participantCount,
+  localAudioLevel = 0
 }: VideoGridProps) {
-  const [fullscreenParticipant, setFullscreenParticipant] = useState<string | null>(null);
+  const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
+  const [pinnedParticipant, setPinnedParticipant] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -245,67 +348,85 @@ export function VideoGrid({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const totalParticipants = participantCount;
-  
+  // Find screen sharing participant
+  const screenSharingParticipant = Array.from(remoteStreams.entries()).find(
+    ([_, data]) => data.isScreenSharing
+  );
+  const isLocalScreenSharing = isScreenSharing;
+  const hasScreenShare = screenSharingParticipant || isLocalScreenSharing;
+
+  // Determine main participant (screen sharer takes priority)
+  const getMainParticipant = () => {
+    if (hasScreenShare) {
+      return isLocalScreenSharing ? 'local' : screenSharingParticipant?.[0] || null;
+    }
+    if (pinnedParticipant) return pinnedParticipant;
+    if (focusedParticipant) return focusedParticipant;
+    
+    // Default to first remote participant or local if no remote
+    const firstRemote = Array.from(remoteStreams.keys())[0];
+    return isMobile && participantCount > 1 ? (firstRemote || 'local') : null;
+  };
+
+  const mainParticipant = getMainParticipant();
+
+  const handleToggleFocus = (participantId: string) => {
+    setFocusedParticipant(focusedParticipant === participantId ? null : participantId);
+  };
+
+  const handleTogglePin = (participantId: string) => {
+    setPinnedParticipant(pinnedParticipant === participantId ? null : participantId);
+  };
+
   // Enhanced grid layout logic
   const getGridClass = () => {
-    if (fullscreenParticipant) return 'grid-cols-1';
+    if (hasScreenShare || mainParticipant) return 'grid-cols-1';
     
     if (isMobile) {
-      if (totalParticipants === 1) return 'grid-cols-1';
-      if (totalParticipants === 2) return 'grid-cols-1 gap-2';
+      if (participantCount === 1) return 'grid-cols-1';
+      if (participantCount === 2) return 'grid-cols-1 gap-2';
       return 'grid-cols-2 gap-2';
     }
     
     // Desktop layout
-    if (totalParticipants === 1) return 'grid-cols-1';
-    if (totalParticipants === 2) return 'grid-cols-1 lg:grid-cols-2';
-    if (totalParticipants <= 4) return 'grid-cols-2';
-    if (totalParticipants <= 6) return 'grid-cols-2 lg:grid-cols-3';
-    if (totalParticipants <= 9) return 'grid-cols-3';
+    if (participantCount === 1) return 'grid-cols-1';
+    if (participantCount === 2) return 'grid-cols-1 lg:grid-cols-2';
+    if (participantCount <= 4) return 'grid-cols-2';
+    if (participantCount <= 6) return 'grid-cols-2 lg:grid-cols-3';
+    if (participantCount <= 9) return 'grid-cols-3';
     return 'grid-cols-3 xl:grid-cols-4';
   };
 
-  const handleToggleFullscreen = (participantId: string) => {
-    setFullscreenParticipant(fullscreenParticipant === participantId ? null : participantId);
+  const getThumbnailGridClass = () => {
+    const thumbnailCount = participantCount - (mainParticipant ? 1 : 0);
+    if (thumbnailCount <= 3) return 'grid-cols-3';
+    if (thumbnailCount <= 4) return 'grid-cols-4';
+    if (thumbnailCount <= 5) return 'grid-cols-5';
+    return 'grid-cols-6';
   };
-
-  // Determine if we should show a participant in fullscreen mode
-  const shouldShowInFullscreen = (participantId: string) => {
-    return fullscreenParticipant === participantId;
-  };
-
-  // Get the main participant for mobile layout
-  const getMainParticipant = () => {
-    if (fullscreenParticipant === 'local') return 'local';
-    if (fullscreenParticipant && remoteStreams.has(fullscreenParticipant)) {
-      return fullscreenParticipant;
-    }
-    // Default to first remote participant or local if no remote
-    const firstRemote = Array.from(remoteStreams.keys())[0];
-    return firstRemote || 'local';
-  };
-
-  const mainParticipant = isMobile && totalParticipants > 1 ? getMainParticipant() : null;
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Main video area for mobile */}
-      {isMobile && totalParticipants > 1 && (
-        <div className="flex-1 p-2">
+    <div className="h-full flex flex-col bg-gray-900">
+      {/* Main video area */}
+      {(hasScreenShare || mainParticipant) && (
+        <div className="flex-1 p-2 lg:p-4">
           {mainParticipant === 'local' ? (
             <VideoTile
               stream={localStream}
               participantName={localParticipantName}
+              participantId={localParticipantId}
               isLocal={true}
               isMuted={isMuted}
               isCameraOff={isCameraOff}
               isScreenShare={isScreenSharing}
               handRaised={localHandRaised}
               isLarge={true}
-              onToggleFullscreen={() => handleToggleFullscreen('local')}
+              isPinned={pinnedParticipant === 'local'}
+              onToggleFullscreen={() => handleToggleFocus('local')}
+              onTogglePin={() => handleTogglePin('local')}
               audioEnabled={!isMuted}
               videoEnabled={!isCameraOff}
+              audioLevel={localAudioLevel}
             />
           ) : (
             (() => {
@@ -314,12 +435,17 @@ export function VideoGrid({
                 <VideoTile
                   stream={remoteData.stream}
                   participantName={remoteData.name}
+                  participantId={mainParticipant!}
                   isLocal={false}
+                  isScreenShare={remoteData.isScreenSharing}
                   handRaised={handRaisedParticipants.has(mainParticipant!)}
                   isLarge={true}
-                  onToggleFullscreen={() => handleToggleFullscreen(mainParticipant!)}
+                  isPinned={pinnedParticipant === mainParticipant}
+                  onToggleFullscreen={() => handleToggleFocus(mainParticipant!)}
+                  onTogglePin={() => handleTogglePin(mainParticipant!)}
                   audioEnabled={remoteData.audioEnabled}
                   videoEnabled={remoteData.videoEnabled}
+                  audioLevel={remoteData.audioLevel}
                 />
               ) : null;
             })()
@@ -327,63 +453,85 @@ export function VideoGrid({
         </div>
       )}
 
-      {/* Thumbnail strip for mobile or main grid */}
+      {/* Thumbnail strip or main grid */}
       <div className={`${
-        isMobile && totalParticipants > 1 
-          ? 'h-24 p-2 bg-gray-900/50' 
-          : 'flex-1 p-4'
+        hasScreenShare || mainParticipant
+          ? 'h-24 lg:h-32 p-2 bg-gray-900/80 backdrop-blur-sm border-t border-gray-700' 
+          : 'flex-1 p-2 lg:p-4'
       }`}>
         <div className={`${
-          isMobile && totalParticipants > 1
-            ? 'flex space-x-2 overflow-x-auto'
-            : `grid gap-4 h-full ${getGridClass()}`
+          hasScreenShare || mainParticipant
+            ? `grid gap-2 h-full ${getThumbnailGridClass()} overflow-x-auto`
+            : `grid gap-2 lg:gap-4 h-full ${getGridClass()}`
         }`}>
+          
           {/* Local video */}
-          {(!isMobile || totalParticipants === 1 || mainParticipant !== 'local') && (
-            <div className={isMobile && totalParticipants > 1 ? 'flex-shrink-0 w-20' : ''}>
-              <VideoTile
-                stream={localStream}
-                participantName={localParticipantName}
-                isLocal={true}
-                isMuted={isMuted}
-                isCameraOff={isCameraOff}
-                isScreenShare={isScreenSharing}
-                handRaised={localHandRaised}
-                isLarge={!isMobile || totalParticipants === 1}
-                onToggleFullscreen={() => handleToggleFullscreen('local')}
-                audioEnabled={!isMuted}
-                videoEnabled={!isCameraOff}
-              />
-            </div>
+          {(!mainParticipant || mainParticipant !== 'local') && (
+            <VideoTile
+              stream={localStream}
+              participantName={localParticipantName}
+              participantId={localParticipantId}
+              isLocal={true}
+              isMuted={isMuted}
+              isCameraOff={isCameraOff}
+              isScreenShare={isScreenSharing}
+              handRaised={localHandRaised}
+              isLarge={!hasScreenShare && !mainParticipant}
+              isPinned={pinnedParticipant === 'local'}
+              onToggleFullscreen={() => handleToggleFocus('local')}
+              onTogglePin={() => handleTogglePin('local')}
+              audioEnabled={!isMuted}
+              videoEnabled={!isCameraOff}
+              audioLevel={localAudioLevel}
+            />
           )}
 
           {/* Remote videos */}
-          {Array.from(remoteStreams.entries()).map(([peerId, { stream, name, audioEnabled, videoEnabled }]) => {
-            if (isMobile && totalParticipants > 1 && mainParticipant === peerId) {
-              return null; // Skip if this is the main participant on mobile
-            }
+          {Array.from(remoteStreams.entries()).map(([peerId, data]) => {
+            if (mainParticipant === peerId) return null;
             
             return (
-              <div key={peerId} className={isMobile && totalParticipants > 1 ? 'flex-shrink-0 w-20' : ''}>
-                <VideoTile
-                  stream={stream}
-                  participantName={name}
-                  isLocal={false}
-                  handRaised={handRaisedParticipants.has(peerId)}
-                  isLarge={!isMobile || totalParticipants === 1}
-                  onToggleFullscreen={() => handleToggleFullscreen(peerId)}
-                  audioEnabled={audioEnabled}
-                  videoEnabled={videoEnabled}
-                />
-              </div>
+              <VideoTile
+                key={peerId}
+                stream={data.stream}
+                participantName={data.name}
+                participantId={peerId}
+                isLocal={false}
+                isScreenShare={data.isScreenSharing}
+                handRaised={handRaisedParticipants.has(peerId)}
+                isLarge={!hasScreenShare && !mainParticipant}
+                isPinned={pinnedParticipant === peerId}
+                onToggleFullscreen={() => handleToggleFocus(peerId)}
+                onTogglePin={() => handleTogglePin(peerId)}
+                audioEnabled={data.audioEnabled}
+                videoEnabled={data.videoEnabled}
+                audioLevel={data.audioLevel}
+              />
             );
           })}
         </div>
       </div>
 
-      {/* Participant count indicator */}
-      <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-sm font-medium backdrop-blur-sm">
-        {participantCount} participant{participantCount !== 1 ? 's' : ''}
+      {/* Enhanced participant count and status */}
+      <div className="absolute top-4 left-4 flex items-center space-x-3 z-10">
+        <div className="bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2">
+          <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+          {participantCount} participant{participantCount !== 1 ? 's' : ''}
+        </div>
+        
+        {hasScreenShare && (
+          <div className="bg-green-500/90 backdrop-blur-sm text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+            <Monitor className="w-3 h-3" />
+            Screen Sharing
+          </div>
+        )}
+        
+        {pinnedParticipant && (
+          <div className="bg-blue-500/90 backdrop-blur-sm text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+            <Pin className="w-3 h-3" />
+            Pinned
+          </div>
+        )}
       </div>
     </div>
   );
