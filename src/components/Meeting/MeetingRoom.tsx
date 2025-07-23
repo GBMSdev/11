@@ -8,8 +8,6 @@ import {
 import { supabase } from '../../lib/supabase';
 import { WebRTCManager } from '../../lib/webrtc';
 import { VideoGrid } from './VideoGrid';
-import { WaitingRoom } from './WaitingRoom';
-import { AdmissionPanel } from './AdmissionPanel';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
@@ -40,7 +38,6 @@ export function MeetingRoom() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isWaitingForAdmission, setIsWaitingForAdmission] = useState(false);
   const [isHost, setIsHost] = useState(false);
   const [participantName, setParticipantName] = useState('');
   const [participantId] = useState(uuidv4());
@@ -57,7 +54,6 @@ export function MeetingRoom() {
   const [handRaisedParticipants, setHandRaisedParticipants] = useState<Set<string>>(new Set());
   const [participantCount, setParticipantCount] = useState(1);
   const [localAudioLevel, setLocalAudioLevel] = useState(0);
-  const [peerMediaStates, setPeerMediaStates] = useState<Map<string, { audioEnabled: boolean; videoEnabled: boolean }>>(new Map());
 
   // WebRTC
   const [webrtcManager, setWebrtcManager] = useState<WebRTCManager | null>(null);
@@ -73,8 +69,7 @@ export function MeetingRoom() {
 
   // Refs
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const chatRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const participantsRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const realtimeChannelsRef = useRef<any[]>([]);
 
   useEffect(() => {
     if (meetingCode) {
@@ -93,22 +88,34 @@ export function MeetingRoom() {
   }, [chatMessages]);
 
   const cleanup = () => {
+    console.log('Cleaning up meeting room...');
+    
+    // Clean up WebRTC
     if (webrtcManager) {
       webrtcManager.leaveMeeting();
     }
+    
+    // Stop local stream
     if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+      localStream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Stopped track:', track.kind);
+      });
     }
-    if (chatRefreshIntervalRef.current && typeof chatRefreshIntervalRef.current.unsubscribe === 'function') {
-      chatRefreshIntervalRef.current.unsubscribe();
-    }
-    if (participantsRefreshIntervalRef.current && typeof participantsRefreshIntervalRef.current.unsubscribe === 'function') {
-      participantsRefreshIntervalRef.current.unsubscribe();
-    }
+    
+    // Unsubscribe from all realtime channels
+    realtimeChannelsRef.current.forEach(channel => {
+      if (channel && typeof channel.unsubscribe === 'function') {
+        channel.unsubscribe();
+      }
+    });
+    realtimeChannelsRef.current = [];
   };
 
   const initializeMeeting = async () => {
     try {
+      console.log('Initializing meeting with code:', meetingCode);
+      
       // Get participant name from location state or prompt
       const name = location.state?.participantName || 
                    location.state?.hostName || 
@@ -119,6 +126,8 @@ export function MeetingRoom() {
       const hostStatus = location.state?.isHost || false;
       setIsHost(hostStatus);
 
+      console.log('Participant name:', name, 'Is host:', hostStatus);
+
       // Fetch meeting details
       const { data: meetingData, error: meetingError } = await supabase
         .from('meetings')
@@ -127,61 +136,30 @@ export function MeetingRoom() {
         .single();
 
       if (meetingError) {
+        console.error('Meeting fetch error:', meetingError);
         toast.error('Meeting not found');
         navigate('/');
         return;
       }
       
+      console.log('Meeting data:', meetingData);
       setMeeting(meetingData);
 
-      // Add participant to database with admission status
-      const { data: participantData, error: participantError } = await supabase
+      // Add participant to database (auto-admitted, no waiting room)
+      const { error: participantError } = await supabase
         .from('participants')
         .insert({
           meeting_id: meetingData.id,
           name: name,
           user_id: null,
-          admitted: hostStatus ? true : null, // Host is auto-admitted, others wait
+          admitted: true, // Everyone is auto-admitted
         });
 
       if (participantError) {
         console.error('Error adding participant:', participantError);
       }
 
-      // If not host, show waiting room
-      if (!hostStatus) {
-        setIsWaitingForAdmission(true);
-        setIsLoading(false);
-        
-        // Listen for admission
-        const admissionChannel = supabase
-          .channel(`admission-${participantId}`)
-          .on('postgres_changes',
-            {
-              event: 'UPDATE',
-              schema: 'public',
-              table: 'participants',
-              filter: `name=eq.${name}`
-            },
-            (payload) => {
-              const updatedParticipant = payload.new as any;
-              if (updatedParticipant.admitted === true) {
-                setIsWaitingForAdmission(false);
-                proceedToMeeting(meetingData, name);
-                admissionChannel.unsubscribe();
-              } else if (updatedParticipant.left_at) {
-                toast.error('You were not admitted to the meeting');
-                navigate('/');
-                admissionChannel.unsubscribe();
-              }
-            }
-          )
-          .subscribe();
-        
-        return;
-      }
-
-      // Host proceeds directly
+      // Proceed directly to meeting
       await proceedToMeeting(meetingData, name);
       
     } catch (error: any) {
@@ -193,13 +171,15 @@ export function MeetingRoom() {
 
   const proceedToMeeting = async (meetingData: any, name: string) => {
     try {
+      console.log('Proceeding to meeting...');
+      
       // Initialize WebRTC
       const manager = new WebRTCManager(meetingData.id, participantId, name);
       setWebrtcManager(manager);
 
       // Setup WebRTC callbacks
       manager.onStream((peerId, stream, participantName, audioEnabled, videoEnabled) => {
-        console.log('Received stream from:', participantName, 'Stream:', stream, 'Tracks:', stream.getTracks().length);
+        console.log('🎥 Received stream from:', participantName, 'Stream tracks:', stream.getTracks().length);
         setRemoteStreams(prev => {
           const newMap = new Map(prev);
           newMap.set(peerId, { 
@@ -210,13 +190,13 @@ export function MeetingRoom() {
             isScreenSharing: false,
             audioLevel: 0
           });
-          console.log('Updated remote streams:', newMap.size);
+          console.log('Updated remote streams count:', newMap.size);
           return newMap;
         });
       });
 
       manager.onPeerLeft((peerId) => {
-        console.log('Peer left:', peerId);
+        console.log('👋 Peer left:', peerId);
         setRemoteStreams(prev => {
           const newMap = new Map(prev);
           newMap.delete(peerId);
@@ -226,11 +206,6 @@ export function MeetingRoom() {
           const newSet = new Set(prev);
           newSet.delete(peerId);
           return newSet;
-        });
-        setPeerMediaStates(prev => {
-          const newMap = new Map(prev);
-          newMap.delete(peerId);
-          return newMap;
         });
       });
 
@@ -249,16 +224,13 @@ export function MeetingRoom() {
 
       // Setup participant count tracking
       manager.onParticipantCount((count) => {
+        console.log('👥 Participant count updated:', count);
         setParticipantCount(count);
       });
 
       // Setup media state tracking
       manager.onMediaStateChanged((peerId, audioEnabled, videoEnabled) => {
-        setPeerMediaStates(prev => {
-          const newMap = new Map(prev);
-          newMap.set(peerId, { audioEnabled, videoEnabled });
-          return newMap;
-        });
+        console.log('🎛️ Media state changed for', peerId, 'Audio:', audioEnabled, 'Video:', videoEnabled);
         
         // Update remote streams with media state
         setRemoteStreams(prev => {
@@ -275,44 +247,17 @@ export function MeetingRoom() {
         });
       });
 
-      // Setup audio level monitoring for local stream
-      const setupLocalAudioMonitoring = (stream: MediaStream) => {
-        if (!stream.getAudioTracks().length) return;
-        
-        const audioContext = new AudioContext();
-        const analyser = audioContext.createAnalyser();
-        const source = audioContext.createMediaStreamSource(stream);
-        
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.8;
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        
-        const updateAudioLevel = () => {
-          if (!isMuted) {
-            analyser.getByteFrequencyData(dataArray);
-            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-            const normalizedLevel = Math.min(average / 128, 1);
-            setLocalAudioLevel(normalizedLevel);
-          } else {
-            setLocalAudioLevel(0);
-          }
-          requestAnimationFrame(updateAudioLevel);
-        };
-
-        updateAudioLevel();
-      };
-
-      // Initialize media
-      console.log('Initializing media...');
+      // Initialize media with better constraints
+      console.log('🎬 Initializing media...');
       const stream = await manager.initializeMedia(!isCameraOff, !isMuted);
       setLocalStream(stream);
-      console.log('Local stream initialized:', stream, 'Tracks:', stream.getTracks().length);
+      console.log('✅ Local stream initialized with tracks:', stream.getTracks().map(t => t.kind));
+
+      // Setup local audio monitoring
       setupLocalAudioMonitoring(stream);
 
       // Join the meeting
-      console.log('Joining meeting...');
+      console.log('🚀 Joining meeting...');
       await manager.joinMeeting();
 
       // Start real-time updates
@@ -323,17 +268,51 @@ export function MeetingRoom() {
       
     } catch (error: any) {
       console.error('Error proceeding to meeting:', error);
-      toast.error('Failed to join meeting');
+      toast.error('Failed to join meeting: ' + error.message);
       navigate('/');
     }
   };
 
+  const setupLocalAudioMonitoring = (stream: MediaStream) => {
+    if (!stream.getAudioTracks().length) return;
+    
+    try {
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      const updateAudioLevel = () => {
+        if (!isMuted) {
+          analyser.getByteFrequencyData(dataArray);
+          const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+          const normalizedLevel = Math.min(average / 128, 1);
+          setLocalAudioLevel(normalizedLevel);
+        } else {
+          setLocalAudioLevel(0);
+        }
+        requestAnimationFrame(updateAudioLevel);
+      };
+
+      updateAudioLevel();
+    } catch (error) {
+      console.error('Audio monitoring setup failed:', error);
+    }
+  };
+
   const startRealtimeUpdates = (meetingId: string) => {
+    console.log('🔄 Starting real-time updates for meeting:', meetingId);
+    
     // Fetch initial data
     fetchChatMessages(meetingId);
     fetchParticipants(meetingId);
 
-    // Set up real-time subscriptions for instant updates
+    // Set up real-time chat subscription
     const chatChannel = supabase
       .channel(`chat-${meetingId}`)
       .on('postgres_changes', 
@@ -344,12 +323,13 @@ export function MeetingRoom() {
           filter: `meeting_id=eq.${meetingId}`
         }, 
         (payload) => {
-          console.log('New message received:', payload.new);
+          console.log('💬 New message received:', payload.new);
           setChatMessages(prev => [...prev, payload.new as ChatMessage]);
         }
       )
       .subscribe();
 
+    // Set up real-time participants subscription
     const participantsChannel = supabase
       .channel(`participants-${meetingId}`)
       .on('postgres_changes',
@@ -360,7 +340,7 @@ export function MeetingRoom() {
           filter: `meeting_id=eq.${meetingId}`
         },
         (payload) => {
-          console.log('New participant joined:', payload.new);
+          console.log('👤 New participant joined:', payload.new);
           setParticipants(prev => [...prev, payload.new as Participant]);
         }
       )
@@ -372,7 +352,7 @@ export function MeetingRoom() {
           filter: `meeting_id=eq.${meetingId}`
         },
         (payload) => {
-          console.log('Participant updated:', payload.new);
+          console.log('👤 Participant updated:', payload.new);
           setParticipants(prev => 
             prev.map(p => p.id === payload.new.id ? payload.new as Participant : p)
           );
@@ -386,15 +366,14 @@ export function MeetingRoom() {
           filter: `meeting_id=eq.${meetingId}`
         },
         (payload) => {
-          console.log('Participant left:', payload.old);
+          console.log('👤 Participant left:', payload.old);
           setParticipants(prev => prev.filter(p => p.id !== payload.old.id));
         }
       )
       .subscribe();
 
     // Store channels for cleanup
-    chatRefreshIntervalRef.current = chatChannel as any;
-    participantsRefreshIntervalRef.current = participantsChannel as any;
+    realtimeChannelsRef.current = [chatChannel, participantsChannel];
   };
 
   const fetchChatMessages = async (meetingId: string) => {
@@ -428,19 +407,19 @@ export function MeetingRoom() {
     }
   };
 
-  const toggleMute = () => {
+  const toggleMute = async () => {
     if (webrtcManager) {
       const newMutedState = !isMuted;
-      webrtcManager.toggleAudio(!newMutedState).catch(console.error);
+      await webrtcManager.toggleAudio(!newMutedState);
       setIsMuted(newMutedState);
       toast.success(newMutedState ? 'Microphone muted' : 'Microphone unmuted');
     }
   };
 
-  const toggleCamera = () => {
+  const toggleCamera = async () => {
     if (webrtcManager) {
       const newCameraState = !isCameraOff;
-      webrtcManager.toggleVideo(!newCameraState).catch(console.error);
+      await webrtcManager.toggleVideo(!newCameraState);
       setIsCameraOff(newCameraState);
       console.log('Camera toggled:', newCameraState ? 'OFF' : 'ON');
       toast.success(newCameraState ? 'Camera turned off' : 'Camera turned on');
@@ -506,8 +485,6 @@ export function MeetingRoom() {
 
       if (error) throw error;
       setNewMessage('');
-      // Immediately fetch messages to show the new message
-      fetchChatMessages(meeting.id);
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message');
@@ -540,53 +517,20 @@ export function MeetingRoom() {
     toast.success('Meeting link copied to clipboard!');
   };
 
-  const handleParticipantAdmitted = (participantId: string) => {
-    // Refresh participants list
-    if (meeting?.id) {
-      fetchParticipants(meeting.id);
-    }
-  };
-
-  const handleParticipantRejected = (participantId: string) => {
-    // Refresh participants list
-    if (meeting?.id) {
-      fetchParticipants(meeting.id);
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="h-screen bg-gray-900 flex items-center justify-center">
         <div className="text-center text-white">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
           <p className="text-lg">Joining meeting...</p>
+          <p className="text-sm opacity-75 mt-2">Setting up video and audio...</p>
         </div>
       </div>
     );
   }
 
-  if (isWaitingForAdmission) {
-    return (
-      <WaitingRoom
-        meetingTitle={meeting?.title || 'Meeting'}
-        participantName={participantName}
-        meetingId={meeting?.id || ''}
-        onAdmitted={() => setIsWaitingForAdmission(false)}
-        onRejected={() => navigate('/')}
-      />
-    );
-  }
-
   return (
     <div className="h-screen bg-gray-900 flex">
-      {/* Host admission panel */}
-      <AdmissionPanel
-        meetingId={meeting?.id}
-        isHost={isHost}
-        onParticipantAdmitted={handleParticipantAdmitted}
-        onParticipantRejected={handleParticipantRejected}
-      />
-      
       {/* Main video area */}
       <div className="flex-1 relative">
         {/* Video Grid */}

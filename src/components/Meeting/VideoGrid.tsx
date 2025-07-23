@@ -40,85 +40,46 @@ function VideoTile({
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
-  const [localAudioLevel, setLocalAudioLevel] = useState(0);
 
   useEffect(() => {
     if (videoRef.current && stream) {
-      console.log('Setting video stream for:', participantName, stream);
+      console.log('🎥 Setting video stream for:', participantName, 'Tracks:', stream.getTracks().length);
       videoRef.current.srcObject = stream;
       
       // Handle video loading
       const video = videoRef.current;
       const handleCanPlay = () => {
-        console.log('Video can play for:', participantName);
+        console.log('✅ Video can play for:', participantName);
         setIsVideoLoaded(true);
-        video.play().catch(console.error);
+        video.play().catch(error => {
+          console.error('❌ Video play failed for:', participantName, error);
+        });
       };
       
       const handleLoadedMetadata = () => {
-        console.log('Video metadata loaded for:', participantName);
+        console.log('📊 Video metadata loaded for:', participantName);
+      };
+      
+      const handleError = (error: any) => {
+        console.error('❌ Video error for:', participantName, error);
       };
       
       video.addEventListener('canplay', handleCanPlay);
       video.addEventListener('loadedmetadata', handleLoadedMetadata);
+      video.addEventListener('error', handleError);
       
       return () => {
         video.removeEventListener('canplay', handleCanPlay);
         video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        video.removeEventListener('error', handleError);
       };
     } else {
-      console.log('No stream for:', participantName, 'stream:', stream);
+      console.log('⚠️ No stream for:', participantName);
       setIsVideoLoaded(false);
     }
-  }, [stream]);
+  }, [stream, participantName]);
 
-  // Enhanced audio level monitoring
-  useEffect(() => {
-    if (!stream || !audioEnabled || isMuted) {
-      setLocalAudioLevel(0);
-      return;
-    }
-
-    let audioContext: AudioContext;
-    let analyser: AnalyserNode;
-    let source: MediaStreamAudioSourceNode;
-    let animationFrame: number;
-
-    const setupAudioAnalysis = async () => {
-      try {
-        audioContext = new AudioContext();
-        analyser = audioContext.createAnalyser();
-        source = audioContext.createMediaStreamSource(stream);
-        
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.8;
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        
-        const updateAudioLevel = () => {
-          analyser.getByteFrequencyData(dataArray);
-          const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-          const normalizedLevel = Math.min(average / 128, 1);
-          setLocalAudioLevel(normalizedLevel);
-          animationFrame = requestAnimationFrame(updateAudioLevel);
-        };
-
-        updateAudioLevel();
-      } catch (error) {
-        console.error('Audio analysis setup failed:', error);
-      }
-    };
-
-    setupAudioAnalysis();
-
-    return () => {
-      if (animationFrame) cancelAnimationFrame(animationFrame);
-      if (audioContext) audioContext.close();
-    };
-  }, [stream, audioEnabled, isMuted]);
-
-  const currentAudioLevel = audioLevel || localAudioLevel;
+  const currentAudioLevel = audioLevel || 0;
   const isSpeaking = currentAudioLevel > 0.1;
 
   const initials = participantName
@@ -171,7 +132,6 @@ function VideoTile({
           autoPlay
           playsInline
           muted={isLocal}
-          controls={false}
           className="w-full h-full object-cover transition-opacity duration-300"
           style={{ transform: isLocal && !isScreenShare ? 'scaleX(-1)' : 'none' }}
         />

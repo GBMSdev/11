@@ -10,22 +10,6 @@ export interface PeerConnection {
   isScreenSharing: boolean;
 }
 
-export interface MediaQuality {
-  video: {
-    width: number;
-    height: number;
-    frameRate: number;
-    bitrate: number;
-  };
-  audio: {
-    sampleRate: number;
-    bitrate: number;
-    echoCancellation: boolean;
-    noiseSuppression: boolean;
-    autoGainControl: boolean;
-  };
-}
-
 export class WebRTCManager {
   private localStream: MediaStream | null = null;
   private peers: Map<string, PeerConnection> = new Map();
@@ -39,71 +23,45 @@ export class WebRTCManager {
   private onHandRaisedCallback?: (participantId: string, name: string, raised: boolean) => void;
   private signalingChannel: any;
   private isInitialized = false;
-  private mediaQuality: MediaQuality;
-  private isMobile: boolean;
 
   constructor(meetingId: string, participantId: string, participantName: string) {
     this.meetingId = meetingId;
     this.participantId = participantId;
     this.participantName = participantName;
-    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    
-    // Adaptive quality based on device
-    this.mediaQuality = this.getOptimalQuality();
     this.setupSignaling();
   }
 
-  private getOptimalQuality(): MediaQuality {
-    const isMobile = this.isMobile;
-    const connection = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
-    const isSlowConnection = connection && (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g');
-
-    return {
-      video: {
-        width: isMobile ? (isSlowConnection ? 480 : 720) : (isSlowConnection ? 720 : 1280),
-        height: isMobile ? (isSlowConnection ? 360 : 540) : (isSlowConnection ? 540 : 720),
-        frameRate: isMobile ? (isSlowConnection ? 15 : 24) : (isSlowConnection ? 24 : 30),
-        bitrate: isMobile ? (isSlowConnection ? 300000 : 800000) : (isSlowConnection ? 800000 : 1500000)
-      },
-      audio: {
-        sampleRate: 48000,
-        bitrate: isSlowConnection ? 32000 : 64000,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    };
-  }
-
   private setupSignaling() {
+    console.log('🔧 Setting up signaling for participant:', this.participantName);
+    
     this.signalingChannel = supabase
       .channel(`webrtc-${this.meetingId}`)
       .on('broadcast', { event: 'offer' }, (payload) => {
-        console.log('Received offer broadcast:', payload.payload);
+        console.log('📨 Received offer from:', payload.payload.name);
         this.handleOffer(payload.payload);
       })
       .on('broadcast', { event: 'answer' }, (payload) => {
-        console.log('Received answer broadcast:', payload.payload);
+        console.log('📨 Received answer from:', payload.payload.name);
         this.handleAnswer(payload.payload);
       })
       .on('broadcast', { event: 'ice-candidate' }, (payload) => {
-        console.log('Received ICE candidate broadcast:', payload.payload);
+        console.log('📨 Received ICE candidate from:', payload.payload.from);
         this.handleIceCandidate(payload.payload);
       })
       .on('broadcast', { event: 'user-joined' }, (payload) => {
-        console.log('User joined broadcast:', payload.payload);
+        console.log('👋 User joined:', payload.payload.name);
         this.handleUserJoined(payload.payload);
       })
       .on('broadcast', { event: 'user-left' }, (payload) => {
-        console.log('User left broadcast:', payload.payload);
+        console.log('👋 User left:', payload.payload.participantId);
         this.handleUserLeft(payload.payload);
       })
       .on('broadcast', { event: 'media-state-changed' }, (payload) => {
-        console.log('Media state changed broadcast:', payload.payload);
+        console.log('🎛️ Media state changed:', payload.payload);
         this.handleMediaStateChanged(payload.payload);
       })
       .on('broadcast', { event: 'hand-raised' }, (payload) => {
-        console.log('Hand raised broadcast:', payload.payload);
+        console.log('✋ Hand raised:', payload.payload);
         if (payload.payload.participantId !== this.participantId) {
           this.onHandRaisedCallback?.(
             payload.payload.participantId, 
@@ -112,52 +70,63 @@ export class WebRTCManager {
           );
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Signaling channel status:', status);
+      });
   }
 
   async initializeMedia(video: boolean = true, audio: boolean = true): Promise<MediaStream> {
     try {
+      console.log('🎥 Initializing media - Video:', video, 'Audio:', audio);
+      
       // Stop existing stream if any
       if (this.localStream) {
-        this.localStream.getTracks().forEach(track => track.stop());
+        this.localStream.getTracks().forEach(track => {
+          track.stop();
+          console.log('🛑 Stopped existing track:', track.kind);
+        });
       }
 
       const constraints: MediaStreamConstraints = {
         video: video ? {
-          width: { ideal: this.mediaQuality.video.width, max: 1920 },
-          height: { ideal: this.mediaQuality.video.height, max: 1080 },
-          frameRate: { ideal: this.mediaQuality.video.frameRate, max: 30 },
-          facingMode: this.isMobile ? 'user' : undefined
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: 'user'
         } : false,
         audio: audio ? {
-          echoCancellation: this.mediaQuality.audio.echoCancellation,
-          noiseSuppression: this.mediaQuality.audio.noiseSuppression,
-          autoGainControl: this.mediaQuality.audio.autoGainControl
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000
         } : false
       };
 
-      console.log('Requesting media with constraints:', constraints);
+      console.log('📋 Media constraints:', constraints);
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('Media stream obtained:', this.localStream);
+      console.log('✅ Media stream obtained with tracks:', this.localStream.getTracks().map(t => `${t.kind}: ${t.label}`));
       
       // Update existing peer connections with new stream
       this.updatePeerConnectionsWithStream();
       
       return this.localStream;
     } catch (error) {
-      console.error('Error accessing media devices:', error);
+      console.error('❌ Error accessing media devices:', error);
+      
       // Fallback to lower quality
       try {
+        console.log('🔄 Trying fallback constraints...');
         const fallbackConstraints = {
-          video: video ? { width: 640, height: 480 } : false,
+          video: video ? { width: 640, height: 480, frameRate: 15 } : false,
           audio: audio
         };
-        console.log('Trying fallback constraints:', fallbackConstraints);
+        
         this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+        console.log('✅ Fallback media stream obtained');
         this.updatePeerConnectionsWithStream();
         return this.localStream;
       } catch (fallbackError) {
-        console.error('Fallback media access failed:', fallbackError);
+        console.error('❌ Fallback media access failed:', fallbackError);
         throw fallbackError;
       }
     }
@@ -166,23 +135,38 @@ export class WebRTCManager {
   private updatePeerConnectionsWithStream() {
     if (!this.localStream) return;
 
-    this.peers.forEach(({ peer }) => {
+    console.log('🔄 Updating peer connections with new stream');
+    this.peers.forEach(({ peer, name }) => {
       // Remove old tracks
       peer.getSenders().forEach(sender => {
         if (sender.track) {
           peer.removeTrack(sender);
+          console.log('🗑️ Removed old track from peer:', name);
         }
       });
 
       // Add new tracks
       this.localStream!.getTracks().forEach(track => {
-        peer.addTrack(track, this.localStream!);
+        const sender = peer.addTrack(track, this.localStream!);
+        console.log('➕ Added new track to peer:', name, track.kind);
+        
+        // Set encoding parameters for better quality
+        if (track.kind === 'video') {
+          const params = sender.getParameters();
+          if (params.encodings && params.encodings.length > 0) {
+            params.encodings[0].maxBitrate = 1500000; // 1.5 Mbps
+            params.encodings[0].maxFramerate = 30;
+            sender.setParameters(params).catch(console.error);
+          }
+        }
       });
     });
   }
 
   async startScreenShare(): Promise<MediaStream> {
     try {
+      console.log('🖥️ Starting screen share...');
+      
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           cursor: 'always',
@@ -193,52 +177,47 @@ export class WebRTCManager {
         audio: true
       });
       
+      console.log('✅ Screen share stream obtained');
+      
       // Replace video track in all peer connections
       const videoTrack = screenStream.getVideoTracks()[0];
-      this.peers.forEach(({ peer, peerId }) => {
+      this.peers.forEach(({ peer, name }) => {
         const sender = peer.getSenders().find(s => 
           s.track && s.track.kind === 'video'
         );
         if (sender && videoTrack) {
-          sender.replaceTrack(videoTrack).catch(console.error);
-        }
-        
-        // Update peer connection state
-        const peerConnection = this.peers.get(peerId);
-        if (peerConnection) {
-          peerConnection.isScreenSharing = true;
+          sender.replaceTrack(videoTrack).then(() => {
+            console.log('🔄 Replaced video track for screen share:', name);
+          }).catch(console.error);
         }
       });
 
       // Broadcast screen sharing state
-      await this.broadcastMediaState(true, true, true);
+      await this.broadcastMediaState(this.isAudioEnabled(), true, true);
 
       // Handle screen share end
       videoTrack.onended = async () => {
+        console.log('🛑 Screen share ended');
         if (this.localStream) {
           const videoTrack = this.localStream.getVideoTracks()[0];
-          this.peers.forEach(({ peer, peerId }) => {
+          this.peers.forEach(({ peer, name }) => {
             const sender = peer.getSenders().find(s => 
               s.track && s.track.kind === 'video'
             );
             if (sender && videoTrack) {
-              sender.replaceTrack(videoTrack).catch(console.error);
-            }
-            
-            // Update peer connection state
-            const peerConnection = this.peers.get(peerId);
-            if (peerConnection) {
-              peerConnection.isScreenSharing = false;
+              sender.replaceTrack(videoTrack).then(() => {
+                console.log('🔄 Restored camera track:', name);
+              }).catch(console.error);
             }
           });
           
-          await this.broadcastMediaState(true, true, false);
+          await this.broadcastMediaState(this.isAudioEnabled(), this.isVideoEnabled(), false);
         }
       };
 
       return screenStream;
     } catch (error) {
-      console.error('Error starting screen share:', error);
+      console.error('❌ Error starting screen share:', error);
       throw error;
     }
   }
@@ -247,23 +226,23 @@ export class WebRTCManager {
     if (this.isInitialized) return;
     this.isInitialized = true;
 
-    console.log('Joining meeting:', this.meetingId, 'as', this.participantName);
+    console.log('🚀 Joining meeting:', this.meetingId, 'as', this.participantName);
 
     // Wait for channel to be ready then announce joining
     setTimeout(async () => {
-      console.log('Broadcasting user joined...');
+      console.log('📢 Broadcasting user joined...');
       const result = await this.signalingChannel.send({
         type: 'broadcast',
         event: 'user-joined',
         payload: { 
           participantId: this.participantId,
           name: this.participantName,
-          audioEnabled: true,
-          videoEnabled: true,
+          audioEnabled: this.isAudioEnabled(),
+          videoEnabled: this.isVideoEnabled(),
           isScreenSharing: false
         }
       });
-      console.log('User joined broadcast result:', result);
+      console.log('📡 User joined broadcast result:', result);
     }, 1000);
 
     this.updateParticipantCount();
@@ -272,13 +251,13 @@ export class WebRTCManager {
   private async handleUserJoined(data: { participantId: string; name: string; audioEnabled: boolean; videoEnabled: boolean; isScreenSharing: boolean }) {
     if (data.participantId === this.participantId) return;
 
-    console.log('User joined:', data.name, data.participantId);
+    console.log('👤 Handling user joined:', data.name);
     await this.createPeerConnection(data.participantId, data.name, true);
     this.updateParticipantCount();
   }
 
   private async createPeerConnection(peerId: string, name: string, isInitiator: boolean) {
-    console.log('Creating peer connection for:', name, 'isInitiator:', isInitiator);
+    console.log('🔗 Creating peer connection for:', name, 'isInitiator:', isInitiator);
 
     const configuration = {
       iceServers: [
@@ -293,51 +272,56 @@ export class WebRTCManager {
 
     const peer = new RTCPeerConnection(configuration);
 
-    // Add local stream tracks
+    // Add local stream tracks immediately
     if (this.localStream) {
-      console.log('Adding local stream tracks to peer connection');
+      console.log('➕ Adding local stream tracks to peer connection for:', name);
       this.localStream.getTracks().forEach(track => {
-        console.log('Adding track:', track.kind, track.label);
         const sender = peer.addTrack(track, this.localStream!);
+        console.log('✅ Added track:', track.kind, 'to peer:', name);
         
         // Apply encoding parameters for better quality
         if (track.kind === 'video') {
           const params = sender.getParameters();
           if (params.encodings && params.encodings.length > 0) {
-            params.encodings[0].maxBitrate = this.mediaQuality.video.bitrate;
-            params.encodings[0].maxFramerate = this.mediaQuality.video.frameRate;
+            params.encodings[0].maxBitrate = 1500000; // 1.5 Mbps
+            params.encodings[0].maxFramerate = 30;
             sender.setParameters(params).catch(console.error);
           }
         }
       });
     } else {
-      console.warn('No local stream available when creating peer connection');
+      console.warn('⚠️ No local stream available when creating peer connection for:', name);
     }
 
     // Handle remote stream
     peer.ontrack = (event) => {
-      console.log('Received remote track from:', name, event.track.kind);
+      console.log('🎬 Received remote track from:', name, 'Kind:', event.track.kind);
       const [remoteStream] = event.streams;
-      console.log('Remote stream:', remoteStream, 'tracks:', remoteStream.getTracks().length);
       
-      const peerConnection = this.peers.get(peerId);
-      if (peerConnection) {
-        peerConnection.stream = remoteStream;
-        console.log('Calling onStreamCallback for:', name);
-        this.onStreamCallback?.(
-          peerId, 
-          remoteStream, 
-          name, 
-          peerConnection.audioEnabled, 
-          peerConnection.videoEnabled
-        );
+      if (remoteStream && remoteStream.getTracks().length > 0) {
+        console.log('✅ Remote stream received with tracks:', remoteStream.getTracks().map(t => t.kind));
+        
+        const peerConnection = this.peers.get(peerId);
+        if (peerConnection) {
+          peerConnection.stream = remoteStream;
+          console.log('📞 Calling onStreamCallback for:', name);
+          this.onStreamCallback?.(
+            peerId, 
+            remoteStream, 
+            name, 
+            peerConnection.audioEnabled, 
+            peerConnection.videoEnabled
+          );
+        }
+      } else {
+        console.warn('⚠️ Received empty or invalid remote stream from:', name);
       }
     };
 
     // Enhanced ICE handling
     peer.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log('Sending ICE candidate to:', name);
+        console.log('🧊 Sending ICE candidate to:', name);
         this.signalingChannel.send({
           type: 'broadcast',
           event: 'ice-candidate',
@@ -346,49 +330,60 @@ export class WebRTCManager {
             to: peerId,
             candidate: event.candidate
           }
-        }).then(result => {
-          console.log('ICE candidate sent result:', result);
         }).catch(error => {
-          console.error('Failed to send ICE candidate:', error);
+          console.error('❌ Failed to send ICE candidate:', error);
         });
+      } else {
+        console.log('🧊 ICE gathering complete for:', name);
       }
     };
 
     // Enhanced connection state monitoring
     peer.onconnectionstatechange = () => {
-      console.log(`Connection state with ${name}:`, peer.connectionState);
-      if (peer.connectionState === 'connected') {
-        console.log(`Successfully connected to ${name}`);
-      } else if (peer.connectionState === 'failed') {
-        console.log(`Connection failed with ${name}, attempting ICE restart`);
-        peer.restartIce();
-      } else if (peer.connectionState === 'disconnected') {
-        console.log(`Disconnected from ${name}`);
-        setTimeout(() => {
-          if (peer.connectionState === 'disconnected') {
-            this.peers.delete(peerId);
-            this.onPeerLeftCallback?.(peerId);
-            this.updateParticipantCount();
-          }
-        }, 5000);
-      } else if (peer.connectionState === 'closed') {
-        console.log(`Connection closed with ${name}`);
-        this.peers.delete(peerId);
-        this.onPeerLeftCallback?.(peerId);
-        this.updateParticipantCount();
+      console.log(`🔗 Connection state with ${name}:`, peer.connectionState);
+      
+      switch (peer.connectionState) {
+        case 'connected':
+          console.log(`✅ Successfully connected to ${name}`);
+          break;
+        case 'connecting':
+          console.log(`🔄 Connecting to ${name}...`);
+          break;
+        case 'failed':
+          console.log(`❌ Connection failed with ${name}, attempting ICE restart`);
+          peer.restartIce();
+          break;
+        case 'disconnected':
+          console.log(`⚠️ Disconnected from ${name}`);
+          setTimeout(() => {
+            if (peer.connectionState === 'disconnected') {
+              console.log(`🗑️ Removing disconnected peer: ${name}`);
+              this.peers.delete(peerId);
+              this.onPeerLeftCallback?.(peerId);
+              this.updateParticipantCount();
+            }
+          }, 5000);
+          break;
+        case 'closed':
+          console.log(`🔒 Connection closed with ${name}`);
+          this.peers.delete(peerId);
+          this.onPeerLeftCallback?.(peerId);
+          this.updateParticipantCount();
+          break;
       }
     };
 
     // Monitor ICE connection state
     peer.oniceconnectionstatechange = () => {
-      console.log(`ICE connection state with ${name}:`, peer.iceConnectionState);
+      console.log(`🧊 ICE connection state with ${name}:`, peer.iceConnectionState);
     };
 
     // Monitor signaling state
     peer.onsignalingstatechange = () => {
-      console.log(`Signaling state with ${name}:`, peer.signalingState);
+      console.log(`📡 Signaling state with ${name}:`, peer.signalingState);
     };
 
+    // Store peer connection
     this.peers.set(peerId, { 
       peerId, 
       peer, 
@@ -399,65 +394,83 @@ export class WebRTCManager {
     });
 
     if (isInitiator) {
-      console.log('Creating offer for:', name);
-      // Create and send offer
-      const offer = await peer.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
-      await peer.setLocalDescription(offer);
-      
-      console.log('Sending offer to:', name);
-      const offerResult = await this.signalingChannel.send({
-        type: 'broadcast',
-        event: 'offer',
-        payload: {
-          from: this.participantId,
-          to: peerId,
-          offer: offer,
-          name: this.participantName
-        }
-      });
-      console.log('Offer sent result:', offerResult);
+      console.log('📤 Creating and sending offer to:', name);
+      try {
+        // Create and send offer
+        const offer = await peer.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
+        
+        await peer.setLocalDescription(offer);
+        console.log('✅ Local description set for offer to:', name);
+        
+        const offerResult = await this.signalingChannel.send({
+          type: 'broadcast',
+          event: 'offer',
+          payload: {
+            from: this.participantId,
+            to: peerId,
+            offer: offer,
+            name: this.participantName
+          }
+        });
+        console.log('📡 Offer sent result:', offerResult);
+      } catch (error) {
+        console.error('❌ Error creating/sending offer to:', name, error);
+      }
     }
   }
 
   private async handleOffer(data: { from: string; to: string; offer: RTCSessionDescriptionInit; name: string }) {
     if (data.to !== this.participantId) return;
 
-    console.log('Received offer from:', data.name);
-    await this.createPeerConnection(data.from, data.name, false);
+    console.log('📨 Processing offer from:', data.name);
     
-    const peerConnection = this.peers.get(data.from);
-    if (peerConnection) {
-      console.log('Setting remote description and creating answer for:', data.name);
-      await peerConnection.peer.setRemoteDescription(data.offer);
+    try {
+      await this.createPeerConnection(data.from, data.name, false);
       
-      const answer = await peerConnection.peer.createAnswer();
-      await peerConnection.peer.setLocalDescription(answer);
-      
-      console.log('Sending answer to:', data.name);
-      this.signalingChannel.send({
-        type: 'broadcast',
-        event: 'answer',
-        payload: {
-          from: this.participantId,
-          to: data.from,
-          answer: answer,
-          name: this.participantName
-        }
-      });
+      const peerConnection = this.peers.get(data.from);
+      if (peerConnection) {
+        console.log('📝 Setting remote description and creating answer for:', data.name);
+        await peerConnection.peer.setRemoteDescription(data.offer);
+        console.log('✅ Remote description set for:', data.name);
+        
+        const answer = await peerConnection.peer.createAnswer();
+        await peerConnection.peer.setLocalDescription(answer);
+        console.log('✅ Local description set for answer to:', data.name);
+        
+        console.log('📤 Sending answer to:', data.name);
+        await this.signalingChannel.send({
+          type: 'broadcast',
+          event: 'answer',
+          payload: {
+            from: this.participantId,
+            to: data.from,
+            answer: answer,
+            name: this.participantName
+          }
+        });
+        console.log('✅ Answer sent to:', data.name);
+      }
+    } catch (error) {
+      console.error('❌ Error handling offer from:', data.name, error);
     }
   }
 
   private async handleAnswer(data: { from: string; to: string; answer: RTCSessionDescriptionInit; name: string }) {
     if (data.to !== this.participantId) return;
 
-    console.log('Received answer from:', data.name);
-    const peerConnection = this.peers.get(data.from);
-    if (peerConnection) {
-      await peerConnection.peer.setRemoteDescription(data.answer);
-      console.log('Set remote description from answer for:', data.name);
+    console.log('📨 Processing answer from:', data.name);
+    
+    try {
+      const peerConnection = this.peers.get(data.from);
+      if (peerConnection) {
+        await peerConnection.peer.setRemoteDescription(data.answer);
+        console.log('✅ Remote description set from answer for:', data.name);
+      }
+    } catch (error) {
+      console.error('❌ Error handling answer from:', data.name, error);
     }
   }
 
@@ -468,55 +481,64 @@ export class WebRTCManager {
     if (peerConnection) {
       try {
         await peerConnection.peer.addIceCandidate(data.candidate);
-        console.log('Added ICE candidate from:', data.from);
+        console.log('🧊 Added ICE candidate from:', data.from);
       } catch (error) {
-        console.error('Error adding ICE candidate:', error);
+        console.error('❌ Error adding ICE candidate from:', data.from, error);
       }
     }
   }
 
   private async handleUserLeft(data: { participantId: string }) {
-    console.log('User left:', data.participantId);
+    console.log('👋 Processing user left:', data.participantId);
     const peerConnection = this.peers.get(data.participantId);
     if (peerConnection) {
       peerConnection.peer.close();
       this.peers.delete(data.participantId);
       this.onPeerLeftCallback?.(data.participantId);
       this.updateParticipantCount();
+      console.log('✅ Cleaned up peer connection for:', data.participantId);
     }
   }
 
   private async handleMediaStateChanged(data: { participantId: string; audioEnabled: boolean; videoEnabled: boolean; isScreenSharing: boolean }) {
     if (data.participantId === this.participantId) return;
 
+    console.log('🎛️ Processing media state change for:', data.participantId);
     const peerConnection = this.peers.get(data.participantId);
     if (peerConnection) {
       peerConnection.audioEnabled = data.audioEnabled;
       peerConnection.videoEnabled = data.videoEnabled;
       peerConnection.isScreenSharing = data.isScreenSharing;
       this.onMediaStateCallback?.(data.participantId, data.audioEnabled, data.videoEnabled);
+      console.log('✅ Updated media state for:', data.participantId);
     }
   }
 
   private async broadcastMediaState(audioEnabled: boolean, videoEnabled: boolean, isScreenSharing: boolean) {
-    await this.signalingChannel.send({
-      type: 'broadcast',
-      event: 'media-state-changed',
-      payload: {
-        participantId: this.participantId,
-        audioEnabled,
-        videoEnabled,
-        isScreenSharing
-      }
-    });
+    try {
+      await this.signalingChannel.send({
+        type: 'broadcast',
+        event: 'media-state-changed',
+        payload: {
+          participantId: this.participantId,
+          audioEnabled,
+          videoEnabled,
+          isScreenSharing
+        }
+      });
+      console.log('📡 Broadcasted media state:', { audioEnabled, videoEnabled, isScreenSharing });
+    } catch (error) {
+      console.error('❌ Error broadcasting media state:', error);
+    }
   }
 
   private updateParticipantCount() {
     const count = this.peers.size + 1; // +1 for local participant
-    console.log('Participant count updated:', count);
+    console.log('👥 Participant count updated:', count);
     this.onParticipantCountCallback?.(count);
   }
 
+  // Public callback setters
   onStream(callback: (peerId: string, stream: MediaStream, name: string, audioEnabled: boolean, videoEnabled: boolean) => void) {
     this.onStreamCallback = callback;
   }
@@ -537,10 +559,12 @@ export class WebRTCManager {
     this.onHandRaisedCallback = callback;
   }
 
+  // Media control methods
   async toggleAudio(enabled: boolean) {
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach(track => {
         track.enabled = enabled;
+        console.log('🎤 Audio track enabled:', enabled);
       });
       await this.broadcastMediaState(enabled, this.isVideoEnabled(), this.isScreenSharing());
     }
@@ -550,6 +574,7 @@ export class WebRTCManager {
     if (this.localStream) {
       this.localStream.getVideoTracks().forEach(track => {
         track.enabled = enabled;
+        console.log('📹 Video track enabled:', enabled);
       });
       await this.broadcastMediaState(this.isAudioEnabled(), enabled, this.isScreenSharing());
     }
@@ -577,48 +602,58 @@ export class WebRTCManager {
     return this.peers.size + 1;
   }
 
-  getPeerMediaStates(): Map<string, { audioEnabled: boolean; videoEnabled: boolean; isScreenSharing: boolean }> {
-    const states = new Map();
-    this.peers.forEach((peer, peerId) => {
-      states.set(peerId, {
-        audioEnabled: peer.audioEnabled,
-        videoEnabled: peer.videoEnabled,
-        isScreenSharing: peer.isScreenSharing
-      });
-    });
-    return states;
-  }
-
   async raiseHand(raised: boolean) {
-    await this.signalingChannel.send({
-      type: 'broadcast',
-      event: 'hand-raised',
-      payload: {
-        participantId: this.participantId,
-        name: this.participantName,
-        raised: raised
-      }
-    });
+    try {
+      await this.signalingChannel.send({
+        type: 'broadcast',
+        event: 'hand-raised',
+        payload: {
+          participantId: this.participantId,
+          name: this.participantName,
+          raised: raised
+        }
+      });
+      console.log('✋ Hand raised state broadcasted:', raised);
+    } catch (error) {
+      console.error('❌ Error broadcasting hand raise:', error);
+    }
   }
 
   async leaveMeeting() {
-    console.log('Leaving meeting');
+    console.log('👋 Leaving meeting...');
     
-    // Announce leaving
-    await this.signalingChannel.send({
-      type: 'broadcast',
-      event: 'user-left',
-      payload: { participantId: this.participantId }
-    });
-
-    // Clean up
-    this.peers.forEach(({ peer }) => peer.close());
-    this.peers.clear();
-    
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+    try {
+      // Announce leaving
+      await this.signalingChannel.send({
+        type: 'broadcast',
+        event: 'user-left',
+        payload: { participantId: this.participantId }
+      });
+    } catch (error) {
+      console.error('❌ Error announcing leave:', error);
     }
 
-    this.signalingChannel.unsubscribe();
+    // Clean up peer connections
+    this.peers.forEach(({ peer, name }) => {
+      console.log('🔒 Closing peer connection with:', name);
+      peer.close();
+    });
+    this.peers.clear();
+    
+    // Stop local stream
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => {
+        track.stop();
+        console.log('🛑 Stopped local track:', track.kind);
+      });
+    }
+
+    // Unsubscribe from signaling
+    if (this.signalingChannel) {
+      this.signalingChannel.unsubscribe();
+      console.log('📡 Unsubscribed from signaling channel');
+    }
+
+    console.log('✅ Meeting cleanup complete');
   }
 }
