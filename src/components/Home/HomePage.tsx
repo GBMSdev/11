@@ -170,6 +170,30 @@ export function HomePage() {
           </Link>
         </div>
       </div>
+      
+      {/* Developer Credits */}
+      <div className="py-8 bg-white border-t border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center">
+            <p className="text-sm text-gray-600 mb-2">
+              Developed with ❤️ by <span className="font-semibold text-blue-600">Aftab Alam</span>
+            </p>
+            <div className="flex items-center justify-center space-x-4 text-sm text-gray-500">
+              <a 
+                href="https://instagram.com/aftabxplained" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center space-x-1 hover:text-blue-600 transition-colors"
+              >
+                <span>📱</span>
+                <span>@aftabxplained</span>
+              </a>
+              <span>•</span>
+              <span className="font-medium text-blue-600">Aftabstack Development</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

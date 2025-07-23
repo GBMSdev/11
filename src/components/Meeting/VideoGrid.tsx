@@ -409,7 +409,7 @@ export function VideoGrid({
     <div className="h-full flex flex-col bg-gray-900">
       {/* Main video area */}
       {(hasScreenShare || mainParticipant) && (
-        <div className="flex-1 p-2 lg:p-4">
+        <div className="flex-1 p-1 sm:p-2 lg:p-4">
           {mainParticipant === 'local' ? (
             <VideoTile
               stream={localStream}
@@ -456,13 +456,13 @@ export function VideoGrid({
       {/* Thumbnail strip or main grid */}
       <div className={`${
         hasScreenShare || mainParticipant
-          ? 'h-24 lg:h-32 p-2 bg-gray-900/80 backdrop-blur-sm border-t border-gray-700' 
-          : 'flex-1 p-2 lg:p-4'
+          ? 'h-20 sm:h-24 lg:h-32 p-1 sm:p-2 bg-gray-900/80 backdrop-blur-sm border-t border-gray-700' 
+          : 'flex-1 p-1 sm:p-2 lg:p-4'
       }`}>
         <div className={`${
           hasScreenShare || mainParticipant
-            ? `grid gap-2 h-full ${getThumbnailGridClass()} overflow-x-auto`
-            : `grid gap-2 lg:gap-4 h-full ${getGridClass()}`
+            ? `grid gap-1 sm:gap-2 h-full ${getThumbnailGridClass()} overflow-x-auto`
+            : `grid gap-1 sm:gap-2 lg:gap-4 h-full ${getGridClass()}`
         }`}>
           
           {/* Local video */}

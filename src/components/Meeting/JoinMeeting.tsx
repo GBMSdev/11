@@ -217,10 +217,25 @@ export function JoinMeeting() {
             <p className="text-sm text-gray-600 text-center">
               Ready to join the meeting
             </p>
+            
+            {/* Developer Credits */}
+            <div className="text-center mt-6 pt-4 border-t border-gray-200">
+              <p className="text-xs text-gray-500">
+                Developed by <span className="font-semibold text-blue-600">Aftab Alam</span> • 
+                <a 
+                  href="https://instagram.com/aftabxplained" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-700 ml-1"
+                >
+                  @aftabxplained
+                </a>
+              </p>
+            </div>
           </div>
 
           {/* Right side - Preview */}
-          <div className="bg-gray-900 rounded-2xl aspect-video flex items-center justify-center relative overflow-hidden order-first lg:order-last">
+          <div className="bg-gray-900 rounded-2xl aspect-video flex items-center justify-center relative overflow-hidden order-first lg:order-last min-h-[200px] sm:min-h-[300px]">
             <div className="absolute inset-0 bg-gradient-to-br from-blue-600/20 to-purple-600/20"></div>
             <div className="text-center text-white z-10">
               <div className="w-20 h-20 sm:w-24 sm:h-24 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">

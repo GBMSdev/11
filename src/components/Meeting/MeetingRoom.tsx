@@ -582,11 +582,11 @@ export function MeetingRoom() {
         </div>
 
         {/* Bottom controls */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 sm:p-6 z-10">
-          <div className="flex items-center justify-center space-x-2 sm:space-x-4">
+        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-3 sm:p-6 z-10">
+          <div className="flex items-center justify-center space-x-1 sm:space-x-3 max-w-full overflow-x-auto">
             <button
               onClick={toggleMute}
-              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
+              className={`p-2 sm:p-4 rounded-full transition-all transform hover:scale-105 flex-shrink-0 ${
                 isMuted 
                   ? 'bg-red-500 hover:bg-red-600' 
                   : 'bg-white/20 hover:bg-white/30'
@@ -594,15 +594,15 @@ export function MeetingRoom() {
               title={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? (
-                <MicOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <MicOff className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               ) : (
-                <Mic className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <Mic className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               )}
             </button>
 
             <button
               onClick={toggleCamera}
-              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
+              className={`p-2 sm:p-4 rounded-full transition-all transform hover:scale-105 flex-shrink-0 ${
                 isCameraOff 
                   ? 'bg-red-500 hover:bg-red-600' 
                   : 'bg-white/20 hover:bg-white/30'
@@ -610,15 +610,15 @@ export function MeetingRoom() {
               title={isCameraOff ? 'Turn on camera' : 'Turn off camera'}
             >
               {isCameraOff ? (
-                <VideoOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <VideoOff className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               ) : (
-                <Video className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <Video className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               )}
             </button>
 
             <button
               onClick={toggleScreenShare}
-              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
+              className={`p-2 sm:p-4 rounded-full transition-all transform hover:scale-105 flex-shrink-0 hidden sm:flex ${
                 isScreenSharing 
                   ? 'bg-blue-500 hover:bg-blue-600' 
                   : 'bg-white/20 hover:bg-white/30'
@@ -626,45 +626,60 @@ export function MeetingRoom() {
               title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
             >
               {isScreenSharing ? (
-                <MonitorOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <MonitorOff className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               ) : (
-                <Monitor className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                <Monitor className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               )}
             </button>
 
             <button
               onClick={toggleHandRaise}
-              className={`p-3 sm:p-4 rounded-full transition-all transform hover:scale-105 ${
+              className={`p-2 sm:p-4 rounded-full transition-all transform hover:scale-105 flex-shrink-0 ${
                 handRaised 
                   ? 'bg-yellow-500 hover:bg-yellow-600' 
                   : 'bg-white/20 hover:bg-white/30'
               }`}
               title={handRaised ? 'Lower hand' : 'Raise hand'}
             >
-              <Hand className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+              <Hand className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
             </button>
 
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-3 sm:p-4 rounded-full bg-white/20 hover:bg-white/30 transition-all transform hover:scale-105 lg:hidden"
+              className="p-2 sm:p-4 rounded-full bg-white/20 hover:bg-white/30 transition-all transform hover:scale-105 flex-shrink-0 lg:hidden"
               title="Toggle chat"
             >
-              <MessageSquare className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+              <MessageSquare className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
             </button>
 
             <button
               onClick={leaveMeeting}
-              className="p-3 sm:p-4 rounded-full bg-red-500 hover:bg-red-600 transition-all transform hover:scale-105"
+              className="p-2 sm:p-4 rounded-full bg-red-500 hover:bg-red-600 transition-all transform hover:scale-105 flex-shrink-0"
               title="Leave meeting"
             >
-              <PhoneOff className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+              <PhoneOff className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
+            </button>
+          </div>
+          
+          {/* Mobile screen share button */}
+          <div className="flex justify-center mt-2 sm:hidden">
+            <button
+              onClick={toggleScreenShare}
+              className={`px-4 py-2 rounded-full text-xs font-medium transition-all ${
+                isScreenSharing 
+                  ? 'bg-blue-500 hover:bg-blue-600 text-white' 
+                  : 'bg-white/20 hover:bg-white/30 text-white'
+              }`}
+              title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
+            >
+              {isScreenSharing ? 'Stop Share' : 'Share Screen'}
             </button>
           </div>
         </div>
       </div>
 
       {/* Sidebar */}
-      <div className={`w-80 bg-white border-l border-gray-200 flex flex-col transition-all duration-300 ${
+      <div className={`w-full sm:w-80 bg-white border-l border-gray-200 flex flex-col transition-all duration-300 ${
         sidebarOpen ? 'translate-x-0' : 'translate-x-full'
       } lg:translate-x-0 fixed lg:relative top-0 right-0 h-full z-20 lg:z-auto`}>
         {/* Sidebar header */}

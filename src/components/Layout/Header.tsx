@@ -1,5 +1,5 @@
 import React from 'react';
-import { Video, LogOut, User, Settings } from 'lucide-react';
+import { Video, LogOut, User, Settings, Code } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
 export function Header() {
@@ -17,6 +17,10 @@ export function Header() {
           </Link>
 
           <nav className="hidden md:flex items-center space-x-8">
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <Code className="w-4 h-4" />
+              <span>by <a href="https://instagram.com/aftabxplained" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-600 hover:text-blue-700">Aftabstack</a></span>
+            </div>
             <Link
               to="/create-meeting"
               className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-lg font-medium hover:from-blue-600 hover:to-purple-700 transition-all transform hover:scale-105"
@@ -24,6 +28,16 @@ export function Header() {
               Create Meeting
             </Link>
           </nav>
+          
+          {/* Mobile menu */}
+          <div className="md:hidden flex items-center space-x-2">
+            <Link
+              to="/create-meeting"
+              className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:from-blue-600 hover:to-purple-700 transition-all text-sm"
+            >
+              Create
+            </Link>
+          </div>
         </div>
       </div>
     </header>

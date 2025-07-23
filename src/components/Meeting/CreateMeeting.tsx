@@ -199,6 +199,21 @@ export function CreateMeeting() {
             </div>
           </form>
         </div>
+        
+        {/* Developer Credits */}
+        <div className="text-center mt-8 pt-6 border-t border-gray-200">
+          <p className="text-xs text-gray-500">
+            Powered by <span className="font-semibold text-blue-600">Aftabstack</span> • 
+            <a 
+              href="https://instagram.com/aftabxplained" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:text-blue-700 ml-1"
+            >
+              @aftabxplained
+            </a>
+          </p>
+        </div>
       </div>
     </div>
   );
