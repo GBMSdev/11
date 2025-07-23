@@ -79,24 +79,31 @@ export class WebRTCManager {
     this.signalingChannel = supabase
       .channel(`webrtc-${this.meetingId}`)
       .on('broadcast', { event: 'offer' }, (payload) => {
+        console.log('Received offer broadcast:', payload.payload);
         this.handleOffer(payload.payload);
       })
       .on('broadcast', { event: 'answer' }, (payload) => {
+        console.log('Received answer broadcast:', payload.payload);
         this.handleAnswer(payload.payload);
       })
       .on('broadcast', { event: 'ice-candidate' }, (payload) => {
+        console.log('Received ICE candidate broadcast:', payload.payload);
         this.handleIceCandidate(payload.payload);
       })
       .on('broadcast', { event: 'user-joined' }, (payload) => {
+        console.log('User joined broadcast:', payload.payload);
         this.handleUserJoined(payload.payload);
       })
       .on('broadcast', { event: 'user-left' }, (payload) => {
+        console.log('User left broadcast:', payload.payload);
         this.handleUserLeft(payload.payload);
       })
       .on('broadcast', { event: 'media-state-changed' }, (payload) => {
+        console.log('Media state changed broadcast:', payload.payload);
         this.handleMediaStateChanged(payload.payload);
       })
       .on('broadcast', { event: 'hand-raised' }, (payload) => {
+        console.log('Hand raised broadcast:', payload.payload);
         if (payload.payload.participantId !== this.participantId) {
           this.onHandRaisedCallback?.(
             payload.payload.participantId, 
@@ -242,18 +249,22 @@ export class WebRTCManager {
 
     console.log('Joining meeting:', this.meetingId, 'as', this.participantName);
 
-    // Announce joining
-    await this.signalingChannel.send({
-      type: 'broadcast',
-      event: 'user-joined',
-      payload: { 
-        participantId: this.participantId,
-        name: this.participantName,
-        audioEnabled: true,
-        videoEnabled: true,
-        isScreenSharing: false
-      }
-    });
+    // Wait for channel to be ready then announce joining
+    setTimeout(async () => {
+      console.log('Broadcasting user joined...');
+      const result = await this.signalingChannel.send({
+        type: 'broadcast',
+        event: 'user-joined',
+        payload: { 
+          participantId: this.participantId,
+          name: this.participantName,
+          audioEnabled: true,
+          videoEnabled: true,
+          isScreenSharing: false
+        }
+      });
+      console.log('User joined broadcast result:', result);
+    }, 1000);
 
     this.updateParticipantCount();
   }
@@ -335,6 +346,10 @@ export class WebRTCManager {
             to: peerId,
             candidate: event.candidate
           }
+        }).then(result => {
+          console.log('ICE candidate sent result:', result);
+        }).catch(error => {
+          console.error('Failed to send ICE candidate:', error);
         });
       }
     };
@@ -393,7 +408,7 @@ export class WebRTCManager {
       await peer.setLocalDescription(offer);
       
       console.log('Sending offer to:', name);
-      this.signalingChannel.send({
+      const offerResult = await this.signalingChannel.send({
         type: 'broadcast',
         event: 'offer',
         payload: {
@@ -403,6 +418,7 @@ export class WebRTCManager {
           name: this.participantName
         }
       });
+      console.log('Offer sent result:', offerResult);
     }
   }
 

@@ -99,11 +99,11 @@ export function MeetingRoom() {
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
-    if (chatRefreshIntervalRef.current) {
-      clearInterval(chatRefreshIntervalRef.current);
+    if (chatRefreshIntervalRef.current && typeof chatRefreshIntervalRef.current.unsubscribe === 'function') {
+      chatRefreshIntervalRef.current.unsubscribe();
     }
-    if (participantsRefreshIntervalRef.current) {
-      clearInterval(participantsRefreshIntervalRef.current);
+    if (participantsRefreshIntervalRef.current && typeof participantsRefreshIntervalRef.current.unsubscribe === 'function') {
+      participantsRefreshIntervalRef.current.unsubscribe();
     }
   };
 
@@ -333,15 +333,68 @@ export function MeetingRoom() {
     fetchChatMessages(meetingId);
     fetchParticipants(meetingId);
 
-    // Set up chat refresh every 1 second for real-time feel
-    chatRefreshIntervalRef.current = setInterval(() => {
-      fetchChatMessages(meetingId);
-    }, 1000);
+    // Set up real-time subscriptions for instant updates
+    const chatChannel = supabase
+      .channel(`chat-${meetingId}`)
+      .on('postgres_changes', 
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'messages',
+          filter: `meeting_id=eq.${meetingId}`
+        }, 
+        (payload) => {
+          console.log('New message received:', payload.new);
+          setChatMessages(prev => [...prev, payload.new as ChatMessage]);
+        }
+      )
+      .subscribe();
 
-    // Set up participants refresh every 3 seconds
-    participantsRefreshIntervalRef.current = setInterval(() => {
-      fetchParticipants(meetingId);
-    }, 3000);
+    const participantsChannel = supabase
+      .channel(`participants-${meetingId}`)
+      .on('postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'participants',
+          filter: `meeting_id=eq.${meetingId}`
+        },
+        (payload) => {
+          console.log('New participant joined:', payload.new);
+          setParticipants(prev => [...prev, payload.new as Participant]);
+        }
+      )
+      .on('postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'participants',
+          filter: `meeting_id=eq.${meetingId}`
+        },
+        (payload) => {
+          console.log('Participant updated:', payload.new);
+          setParticipants(prev => 
+            prev.map(p => p.id === payload.new.id ? payload.new as Participant : p)
+          );
+        }
+      )
+      .on('postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'participants',
+          filter: `meeting_id=eq.${meetingId}`
+        },
+        (payload) => {
+          console.log('Participant left:', payload.old);
+          setParticipants(prev => prev.filter(p => p.id !== payload.old.id));
+        }
+      )
+      .subscribe();
+
+    // Store channels for cleanup
+    chatRefreshIntervalRef.current = chatChannel as any;
+    participantsRefreshIntervalRef.current = participantsChannel as any;
   };
 
   const fetchChatMessages = async (meetingId: string) => {
@@ -517,6 +570,7 @@ export function MeetingRoom() {
       <WaitingRoom
         meetingTitle={meeting?.title || 'Meeting'}
         participantName={participantName}
+        meetingId={meeting?.id || ''}
         onAdmitted={() => setIsWaitingForAdmission(false)}
         onRejected={() => navigate('/')}
       />

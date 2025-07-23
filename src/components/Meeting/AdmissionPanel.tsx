@@ -31,7 +31,7 @@ export function AdmissionPanel({
 
     fetchPendingParticipants();
     
-    // Set up real-time subscription for pending participants
+    // Set up real-time subscription for instant admission updates
     const channel = supabase
       .channel(`admission-${meetingId}`)
       .on('postgres_changes', 
@@ -43,7 +43,7 @@ export function AdmissionPanel({
         }, 
         (payload) => {
           const newParticipant = payload.new as PendingParticipant;
-          if (!newParticipant.left_at) {
+          if (newParticipant.admitted === null && !newParticipant.left_at) {
             setPendingParticipants(prev => [...prev, newParticipant]);
             setIsVisible(true);
             toast.info(`${newParticipant.name} wants to join the meeting`);
@@ -59,9 +59,14 @@ export function AdmissionPanel({
         },
         (payload) => {
           const updatedParticipant = payload.new as PendingParticipant & { admitted?: boolean };
-          setPendingParticipants(prev => 
-            prev.filter(p => p.id !== updatedParticipant.id)
-          );
+          if (updatedParticipant.admitted !== null || updatedParticipant.left_at) {
+            setPendingParticipants(prev => 
+              prev.filter(p => p.id !== updatedParticipant.id)
+            );
+            if (pendingParticipants.length <= 1) {
+              setIsVisible(false);
+            }
+          }
         }
       )
       .subscribe();

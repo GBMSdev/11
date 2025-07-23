@@ -4,20 +4,47 @@ import { Clock, User, Shield, CheckCircle, XCircle } from 'lucide-react';
 interface WaitingRoomProps {
   meetingTitle: string;
   participantName: string;
+  meetingId: string;
   onAdmitted: () => void;
   onRejected: () => void;
 }
 
-export function WaitingRoom({ meetingTitle, participantName, onAdmitted, onRejected }: WaitingRoomProps) {
+export function WaitingRoom({ meetingTitle, participantName, meetingId, onAdmitted, onRejected }: WaitingRoomProps) {
   const [waitingTime, setWaitingTime] = useState(0);
+  const [admissionStatus, setAdmissionStatus] = useState<'waiting' | 'admitted' | 'rejected'>('waiting');
 
   useEffect(() => {
     const interval = setInterval(() => {
       setWaitingTime(prev => prev + 1);
     }, 1000);
 
+    // Set up real-time admission status monitoring
+    const admissionChannel = supabase
+      .channel(`waiting-${meetingId}-${participantName}`)
+      .on('postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'participants',
+          filter: `meeting_id=eq.${meetingId}`
+        },
+        (payload) => {
+          const updatedParticipant = payload.new as any;
+          if (updatedParticipant.name === participantName) {
+            if (updatedParticipant.admitted === true) {
+              setAdmissionStatus('admitted');
+              onAdmitted();
+            } else if (updatedParticipant.left_at) {
+              setAdmissionStatus('rejected');
+              onRejected();
+            }
+          }
+        }
+      )
+      .subscribe();
+      admissionChannel.unsubscribe();
     return () => clearInterval(interval);
-  }, []);
+  }, [meetingId, participantName, onAdmitted, onRejected]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
