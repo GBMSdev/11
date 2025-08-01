@@ -40,11 +40,15 @@ function VideoTile({
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+  const [hasAudio, setHasAudio] = useState(false);
 
   useEffect(() => {
     if (videoRef.current && stream) {
       console.log('🎥 Setting video stream for:', participantName, 'Tracks:', stream.getTracks().length);
       videoRef.current.srcObject = stream;
+      
+      // Check if stream has audio
+      setHasAudio(stream.getAudioTracks().length > 0);
       
       // Handle video loading
       const video = videoRef.current;
@@ -56,6 +60,10 @@ function VideoTile({
         });
       };
       
+      const handleLoadStart = () => {
+        console.log('📊 Video load started for:', participantName);
+      };
+      
       const handleLoadedMetadata = () => {
         console.log('📊 Video metadata loaded for:', participantName);
       };
@@ -65,11 +73,20 @@ function VideoTile({
       };
       
       video.addEventListener('canplay', handleCanPlay);
+      video.addEventListener('loadstart', handleLoadStart);
       video.addEventListener('loadedmetadata', handleLoadedMetadata);
       video.addEventListener('error', handleError);
       
+      // Ensure video plays
+      video.autoplay = true;
+      video.playsInline = true;
+      if (!isLocal) {
+        video.muted = false; // Ensure remote videos are not muted
+      }
+      
       return () => {
         video.removeEventListener('canplay', handleCanPlay);
+        video.removeEventListener('loadstart', handleLoadStart);
         video.removeEventListener('loadedmetadata', handleLoadedMetadata);
         video.removeEventListener('error', handleError);
       };
@@ -132,6 +149,7 @@ function VideoTile({
           autoPlay
           playsInline
           muted={isLocal}
+          controls={false}
           className="w-full h-full object-cover transition-opacity duration-300"
           style={{ transform: isLocal && !isScreenShare ? 'scaleX(-1)' : 'none' }}
         />
@@ -268,6 +286,11 @@ function VideoTile({
             <p className="text-sm">Loading video...</p>
           </div>
         </div>
+      )}
+      
+      {/* Audio indicator for debugging */}
+      {!isLocal && hasAudio && (
+        <div className="absolute top-1 right-1 bg-green-500 w-2 h-2 rounded-full opacity-75"></div>
       )}
 
       {/* Speaking indicator overlay */}

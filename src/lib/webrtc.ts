@@ -23,6 +23,8 @@ export class WebRTCManager {
   private onHandRaisedCallback?: (participantId: string, name: string, raised: boolean) => void;
   private signalingChannel: any;
   private isInitialized = false;
+  private audioContext?: AudioContext;
+  private audioAnalyser?: AnalyserNode;
 
   constructor(meetingId: string, participantId: string, participantName: string) {
     this.meetingId = meetingId;
@@ -106,6 +108,11 @@ export class WebRTCManager {
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('✅ Media stream obtained with tracks:', this.localStream.getTracks().map(t => `${t.kind}: ${t.label}`));
       
+      // Setup audio monitoring
+      if (audio && this.localStream.getAudioTracks().length > 0) {
+        this.setupAudioMonitoring();
+      }
+      
       // Update existing peer connections with new stream
       this.updatePeerConnectionsWithStream();
       
@@ -123,12 +130,35 @@ export class WebRTCManager {
         
         this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
         console.log('✅ Fallback media stream obtained');
+        
+        if (audio && this.localStream.getAudioTracks().length > 0) {
+          this.setupAudioMonitoring();
+        }
+        
         this.updatePeerConnectionsWithStream();
         return this.localStream;
       } catch (fallbackError) {
         console.error('❌ Fallback media access failed:', fallbackError);
         throw fallbackError;
       }
+    }
+  }
+
+  private setupAudioMonitoring() {
+    if (!this.localStream || this.localStream.getAudioTracks().length === 0) return;
+    
+    try {
+      this.audioContext = new AudioContext();
+      this.audioAnalyser = this.audioContext.createAnalyser();
+      const source = this.audioContext.createMediaStreamSource(this.localStream);
+      
+      this.audioAnalyser.fftSize = 256;
+      this.audioAnalyser.smoothingTimeConstant = 0.8;
+      source.connect(this.audioAnalyser);
+      
+      console.log('🎤 Audio monitoring setup complete');
+    } catch (error) {
+      console.error('❌ Audio monitoring setup failed:', error);
     }
   }
 
@@ -154,8 +184,14 @@ export class WebRTCManager {
         if (track.kind === 'video') {
           const params = sender.getParameters();
           if (params.encodings && params.encodings.length > 0) {
-            params.encodings[0].maxBitrate = 1500000; // 1.5 Mbps
+            params.encodings[0].maxBitrate = 2000000; // 2 Mbps
             params.encodings[0].maxFramerate = 30;
+            sender.setParameters(params).catch(console.error);
+          }
+        } else if (track.kind === 'audio') {
+          const params = sender.getParameters();
+          if (params.encodings && params.encodings.length > 0) {
+            params.encodings[0].maxBitrate = 128000; // 128 kbps
             sender.setParameters(params).catch(console.error);
           }
         }
@@ -174,10 +210,20 @@ export class WebRTCManager {
           height: { ideal: 1080 },
           frameRate: { ideal: 30 }
         },
-        audio: true
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
       });
       
       console.log('✅ Screen share stream obtained');
+      
+      // Keep audio from original stream if available
+      if (this.localStream && this.localStream.getAudioTracks().length > 0) {
+        const audioTrack = this.localStream.getAudioTracks()[0];
+        screenStream.addTrack(audioTrack);
+      }
       
       // Replace video track in all peer connections
       const videoTrack = screenStream.getVideoTracks()[0];
@@ -198,27 +244,42 @@ export class WebRTCManager {
       // Handle screen share end
       videoTrack.onended = async () => {
         console.log('🛑 Screen share ended');
-        if (this.localStream) {
-          const videoTrack = this.localStream.getVideoTracks()[0];
-          this.peers.forEach(({ peer, name }) => {
-            const sender = peer.getSenders().find(s => 
-              s.track && s.track.kind === 'video'
-            );
-            if (sender && videoTrack) {
-              sender.replaceTrack(videoTrack).then(() => {
-                console.log('🔄 Restored camera track:', name);
-              }).catch(console.error);
-            }
-          });
-          
-          await this.broadcastMediaState(this.isAudioEnabled(), this.isVideoEnabled(), false);
-        }
+        await this.stopScreenShare();
       };
 
       return screenStream;
     } catch (error) {
       console.error('❌ Error starting screen share:', error);
       throw error;
+    }
+  }
+
+  async stopScreenShare(): Promise<void> {
+    try {
+      console.log('🛑 Stopping screen share...');
+      
+      // Reinitialize camera stream
+      const stream = await this.initializeMedia(true, this.isAudioEnabled());
+      
+      // Replace video track back to camera
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        this.peers.forEach(({ peer, name }) => {
+          const sender = peer.getSenders().find(s => 
+            s.track && s.track.kind === 'video'
+          );
+          if (sender) {
+            sender.replaceTrack(videoTrack).then(() => {
+              console.log('🔄 Restored camera track:', name);
+            }).catch(console.error);
+          }
+        });
+      }
+      
+      await this.broadcastMediaState(this.isAudioEnabled(), this.isVideoEnabled(), false);
+      console.log('✅ Screen share stopped successfully');
+    } catch (error) {
+      console.error('❌ Error stopping screen share:', error);
     }
   }
 
@@ -265,7 +326,13 @@ export class WebRTCManager {
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
+        { urls: 'stun:stun4.l.google.com:19302' },
+        // Add TURN servers for better connectivity
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
       ],
       iceCandidatePoolSize: 10
     };
@@ -283,8 +350,14 @@ export class WebRTCManager {
         if (track.kind === 'video') {
           const params = sender.getParameters();
           if (params.encodings && params.encodings.length > 0) {
-            params.encodings[0].maxBitrate = 1500000; // 1.5 Mbps
+            params.encodings[0].maxBitrate = 2000000; // 2 Mbps
             params.encodings[0].maxFramerate = 30;
+            sender.setParameters(params).catch(console.error);
+          }
+        } else if (track.kind === 'audio') {
+          const params = sender.getParameters();
+          if (params.encodings && params.encodings.length > 0) {
+            params.encodings[0].maxBitrate = 128000; // 128 kbps
             sender.setParameters(params).catch(console.error);
           }
         }
@@ -300,6 +373,12 @@ export class WebRTCManager {
       
       if (remoteStream && remoteStream.getTracks().length > 0) {
         console.log('✅ Remote stream received with tracks:', remoteStream.getTracks().map(t => t.kind));
+        
+        // Ensure audio tracks are properly configured
+        remoteStream.getAudioTracks().forEach(track => {
+          track.enabled = true;
+          console.log('🔊 Audio track enabled for:', name);
+        });
         
         const peerConnection = this.peers.get(peerId);
         if (peerConnection) {
@@ -571,12 +650,23 @@ export class WebRTCManager {
   }
 
   async toggleVideo(enabled: boolean) {
-    if (this.localStream) {
-      this.localStream.getVideoTracks().forEach(track => {
-        track.enabled = enabled;
-        console.log('📹 Video track enabled:', enabled);
-      });
+    try {
+      if (enabled && (!this.localStream || this.localStream.getVideoTracks().length === 0)) {
+        // Need to get new video stream
+        console.log('🎥 Getting new video stream...');
+        const stream = await this.initializeMedia(true, this.isAudioEnabled());
+        this.localStream = stream;
+      } else if (this.localStream) {
+        this.localStream.getVideoTracks().forEach(track => {
+          track.enabled = enabled;
+          console.log('📹 Video track enabled:', enabled);
+        });
+      }
+      
       await this.broadcastMediaState(this.isAudioEnabled(), enabled, this.isScreenSharing());
+    } catch (error) {
+      console.error('❌ Error toggling video:', error);
+      throw error;
     }
   }
 
@@ -600,6 +690,15 @@ export class WebRTCManager {
 
   getParticipantCount(): number {
     return this.peers.size + 1;
+  }
+
+  getAudioLevel(): number {
+    if (!this.audioAnalyser || !this.isAudioEnabled()) return 0;
+    
+    const dataArray = new Uint8Array(this.audioAnalyser.frequencyBinCount);
+    this.audioAnalyser.getByteFrequencyData(dataArray);
+    const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+    return Math.min(average / 128, 1);
   }
 
   async raiseHand(raised: boolean) {
@@ -646,6 +745,11 @@ export class WebRTCManager {
         track.stop();
         console.log('🛑 Stopped local track:', track.kind);
       });
+    }
+
+    // Clean up audio context
+    if (this.audioContext) {
+      this.audioContext.close();
     }
 
     // Unsubscribe from signaling
